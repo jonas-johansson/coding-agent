@@ -4540,10 +4540,9 @@ function charWidth(char: string) {
     return 0;
   }
 
-  // U+1F5A7 (🖧) lives in the emoji block, but many terminals render it
-  // with text presentation as a single-cell symbol. Treat it as narrow so
-  // table borders do not drift when this glyph appears in a cell.
-  if (codePoint === 0x1f5a7) {
+  // Some symbols in the emoji block are rendered as single-cell glyphs by
+  // common terminals. Treat them as narrow so table borders do not drift.
+  if (codePoint === 0x1f5a7 || codePoint === 0x1f326) {
     return 1;
   }
 
