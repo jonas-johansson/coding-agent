@@ -326,6 +326,7 @@ const tui = new Tui({
     { label: "/variants", detail: "List model variants", kind: "command", insertText: "/variants", executeOnAccept: true },
     { label: "/sessions", detail: "Open the session picker", kind: "command", insertText: "/sessions", executeOnAccept: true },
     { label: "/resume", detail: "Resume a session by id", kind: "command", insertText: "/resume " },
+    { label: "/star", detail: "Star or unstar the current session", kind: "command", insertText: "/star" },
     { label: "/tree", detail: "Open the conversation tree (Ctrl+B)", kind: "command", insertText: "/tree", executeOnAccept: true },
     { label: "/undo", detail: "Undo the last user turn", kind: "command", insertText: "/undo" },
     { label: "/skills", detail: "List available skills", kind: "command", insertText: "/skills " },
@@ -586,6 +587,7 @@ function activateSession(session: Session) {
   clearPendingInputState();
   rebuildTuiFromSession();
   tui.setSessionTitle(session.title ?? "");
+  tui.setSessionStarred(session.starred ?? false);
   tui.setWindowTitle(formatSessionWindowTitle(session.title));
   refreshSessionStatsFromSession();
 }
@@ -935,9 +937,12 @@ function formatSessionList(sessions: SessionListItem[]): string {
   }
 
   const rows = sessions.map((session) => {
-    const marker = session.id === activeSession.id ? " *" : "";
+    const marker = [
+      session.starred ? "★" : "",
+      session.id === activeSession.id ? "*" : "",
+    ].filter(Boolean).join(" ");
     return [
-      `\`${session.id}\`${marker}`,
+      `\`${session.id}\`${marker ? ` ${marker}` : ""}`,
       formatSessionTimestamp(session.updatedAt),
       String(session.entryCount),
       formatSessionCost(session.cost, DEFAULT_COST_DISPLAY_CONFIG),
@@ -953,7 +958,7 @@ function formatSessionList(sessions: SessionListItem[]): string {
     "|---|---|---:|---:|---|---|",
     ...rows.map((row) => `| ${row.join(" | ")} |`),
     "",
-    "Use `/resume <session-id>` to resume a session. `*` marks the active session.",
+    "Use `/resume <session-id>` to resume a session. `★` marks a starred session and `*` marks the active session.",
   ].join("\n");
 }
 
@@ -1038,12 +1043,18 @@ async function handleCommand(command: string): Promise<boolean> {
     }
     case "/sessions": {
       const sessions = await listSessions(process.cwd());
-      tui.openSessionOverlay(sessions.map((session) => ({
+      const sortedSessions = sessions.slice().sort((a, b) => {
+        if (a.starred && !b.starred) return -1;
+        if (!a.starred && b.starred) return 1;
+        return b.updatedAt.localeCompare(a.updatedAt);
+      });
+      tui.openSessionOverlay(sortedSessions.map((session) => ({
         id: session.id,
         updatedAt: session.updatedAt,
         entryCount: session.entryCount,
         currentModelId: session.currentModelId,
         title: session.title,
+        starred: session.starred,
         isActive: session.id === activeSession.id,
         cost: session.cost,
       })));
@@ -1057,6 +1068,18 @@ async function handleCommand(command: string): Promise<boolean> {
       }
 
       await resumeSessionById(sessionId);
+      return true;
+    }
+    case "/star": {
+      const nextStarred = !activeSession.starred;
+      activeSession = {
+        ...activeSession,
+        starred: nextStarred,
+        updatedAt: new Date().toISOString(),
+      };
+      await saveSession(activeSession);
+      tui.setSessionStarred(nextStarred);
+      tui.setStatus(nextStarred ? "Session starred" : "Session unstarred");
       return true;
     }
     case "/tree": {

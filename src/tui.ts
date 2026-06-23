@@ -66,6 +66,7 @@ export type SessionOverlayItem = {
   entryCount: number;
   currentModelId: string;
   title?: string;
+  starred?: boolean;
   isActive?: boolean;
   cost?: number;
 };
@@ -264,6 +265,7 @@ export class Tui {
   private exitConfirmPresses = 0;
   private collapseOverrides = new Map<string, boolean>();
   private sessionTitle = "";
+  private sessionStarred = false;
 
   // ── Suggestion popup state ──
   private slashItems: SuggestionItem[] = [];
@@ -455,6 +457,11 @@ export class Tui {
 
   setSessionTitle(title: string) {
     this.sessionTitle = title;
+    this.requestRender();
+  }
+
+  setSessionStarred(starred: boolean) {
+    this.sessionStarred = starred;
     this.requestRender();
   }
 
@@ -2692,13 +2699,18 @@ export class Tui {
   private renderHeaderLine(columns: number): string {
     const cwdDir = this.cwd ? basename(this.cwd) : "";
     const parts = [this.sessionTitle, cwdDir].filter(Boolean);
-    const label = parts.length > 1 ? parts.join(" · ") : (parts[0] ?? "");
+    const innerLabel = parts.length > 1 ? parts.join(" · ") : (parts[0] ?? "");
+    const starPrefix = this.sessionStarred ? "★ " : "";
+    const label = starPrefix + innerLabel;
     const text = truncateToWidth(label, Math.max(1, columns - 2));
     const visible = displayWidth(text);
     const totalPad = Math.max(0, columns - 2 - visible);
     const leftPad = Math.floor(totalPad / 2);
     const rightPad = totalPad - leftPad;
-    return `${bg(currentTheme.canvas.bg)}${fg(245)}${" ".repeat(leftPad)}${text}${" ".repeat(rightPad)}${RESET}`;
+    const content = this.sessionStarred
+      ? `${fg(currentTheme.starColor)}★ ${RESET}${bg(currentTheme.canvas.bg)}${fg(245)}${text.slice(2)}`
+      : `${fg(245)}${text}`;
+    return `${bg(currentTheme.canvas.bg)}${" ".repeat(leftPad)}${content}${" ".repeat(rightPad)}${RESET}`;
   }
 
   private renderSuggestionPopup(columns: number, matches: SuggestionItem[], selectedIndex: number): string[] {
@@ -2876,6 +2888,7 @@ export class Tui {
       cost: item.cost !== undefined ? formatSessionCost(item.cost, this.costDisplayConfig) : "",
       fgColor: baseFg,
       activeColor: item.isActive ? 41 : baseFg,
+      starMarker: item.starred ? "★" : " ",
       activeMarker: item.isActive ? "●" : " ",
     });
   }
@@ -4369,6 +4382,7 @@ type SessionOverlayColumns = {
   cost: string;
   fgColor: number;
   activeColor: number;
+  starMarker?: string;
   activeMarker?: string;
 };
 
@@ -4379,20 +4393,22 @@ function renderSessionOverlayColumns(options: SessionOverlayColumns): string {
   const costWidth = 9;
   const gap = 2;
   const leftPadding = 2;
+  const starWidth = 1;
   const markerWidth = 1;
-  const fixedWidth = leftPadding + markerWidth + gap + dateWidth + gap + idWidth + gap + gap + entriesWidth + gap + costWidth;
+  const fixedWidth = leftPadding + starWidth + gap + markerWidth + gap + dateWidth + gap + idWidth + gap + gap + entriesWidth + gap + costWidth;
   const nameWidth = Math.max(0, options.columns - fixedWidth);
 
+  const starMarker = options.starMarker ?? " ";
   const marker = options.activeMarker ?? " ";
   const date = padRight(truncateToWidth(options.date, dateWidth), dateWidth);
   const id = padRight(truncateToWidth(options.id, idWidth), idWidth);
   const name = padRight(truncateToWidth(options.name, nameWidth), nameWidth);
   const entries = padRight(truncateToWidth(options.entries, entriesWidth), entriesWidth);
   const cost = padLeft(truncateToWidth(options.cost, costWidth), costWidth);
-  const visible = leftPadding + markerWidth + gap + dateWidth + gap + idWidth + gap + nameWidth + gap + entriesWidth + gap + costWidth;
+  const visible = leftPadding + starWidth + gap + markerWidth + gap + dateWidth + gap + idWidth + gap + nameWidth + gap + entriesWidth + gap + costWidth;
   const trailing = Math.max(0, options.columns - visible);
 
-  return `${bg(options.bgColor)}${" ".repeat(leftPadding)}${fg(options.activeColor)}${marker}${fg(options.fgColor)}${" ".repeat(gap)}${date}${" ".repeat(gap)}${id}${fg(currentTheme.blocks.user.accent)}${" ".repeat(gap)}${name}${fg(options.fgColor)}${" ".repeat(gap)}${entries}${" ".repeat(gap)}${fg(currentTheme.status.costFg)}${cost}${" ".repeat(trailing)}${RESET}`;
+  return `${bg(options.bgColor)}${" ".repeat(leftPadding)}${fg(currentTheme.starColor)}${starMarker}${fg(options.fgColor)}${" ".repeat(gap)}${fg(options.activeColor)}${marker}${fg(options.fgColor)}${" ".repeat(gap)}${date}${" ".repeat(gap)}${id}${fg(currentTheme.blocks.user.accent)}${" ".repeat(gap)}${name}${fg(options.fgColor)}${" ".repeat(gap)}${entries}${" ".repeat(gap)}${fg(currentTheme.status.costFg)}${cost}${" ".repeat(trailing)}${RESET}`;
 }
 
 function padRight(text: string, width: number): string {

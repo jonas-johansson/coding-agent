@@ -71,6 +71,7 @@ export type Session = {
   currentModelId: string;
   currentModelVariant?: string;
   title?: string;
+  starred?: boolean;
   activeEntryId: string | null;
   entries: SessionEntry[];
 };
@@ -84,6 +85,7 @@ export type SessionListItem = {
   currentModelId: string;
   currentModelVariant?: string;
   title?: string;
+  starred?: boolean;
   activeEntryId: string | null;
   entryCount: number;
   cost: number;
@@ -215,6 +217,7 @@ export function createSession(cwd: string, currentModelId: string, currentModelV
     updatedAt: now,
     currentModelId,
     ...(currentModelVariant !== undefined && { currentModelVariant }),
+    starred: false,
     activeEntryId: null,
     entries: [],
   };
@@ -554,6 +557,7 @@ function toSessionListItem(session: Session, filePath: string): SessionListItem 
     updatedAt: session.updatedAt,
     currentModelId: session.currentModelId,
     ...(title !== undefined && { title }),
+    ...(session.starred && { starred: true }),
     activeEntryId: session.activeEntryId,
     entryCount: session.entries.length,
     cost,
@@ -589,6 +593,7 @@ function isSession(value: unknown): value is Session {
     && isString(value.currentModelId)
     && isOptionalString(value.currentModelVariant)
     && isOptionalString(value.title)
+    && isOptionalBoolean(value.starred)
     && isNullableString(value.activeEntryId)
     && Array.isArray(value.entries)
     && value.entries.every(isSessionEntry)

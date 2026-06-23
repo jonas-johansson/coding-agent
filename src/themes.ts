@@ -43,6 +43,7 @@ export type TuiTheme = {
   input: { bg: number; bashBg: number; fg: number; bashFg: number };
   glyphs: { done: { glyph: string; color: number }; error: { glyph: string; color: number } };
   logoColor: number;
+  starColor: number;
   shikiTheme: string;
 };
 
@@ -77,6 +78,7 @@ export const BUILT_IN_THEMES: Record<string, TuiTheme> = {
     input: { bg: 236, bashBg: 237, fg: 252, bashFg: 179 },
     glyphs: { done: { glyph: "✓", color: 151 }, error: { glyph: "✗", color: 217 } },
     logoColor: 117,
+    starColor: 220,
     shikiTheme: "dark-plus",
   },
   light: {
@@ -114,6 +116,7 @@ export const BUILT_IN_THEMES: Record<string, TuiTheme> = {
     input: { bg: 254, bashBg: 255, fg: 235, bashFg: 172 },
     glyphs: { done: { glyph: "✓", color: 65 }, error: { glyph: "✗", color: 167 } },
     logoColor: 68,
+    starColor: 172,
     shikiTheme: "light-plus",
   },
 };
