@@ -56,6 +56,7 @@ Switch models at any time with **Tab** or `/model <model-id>`. Model IDs use the
 | `opencode/claude-opus-4-7` |
 | `opencode/claude-opus-4-8` |
 | `opencode/kimi-k2.6` |
+| `opencode/glm-5.2` |
 | `opencode/gpt-5.5` |
 | `fireworks/kimi-k2.6` |
 | `openai/gpt-5.5` |

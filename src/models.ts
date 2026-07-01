@@ -133,6 +133,19 @@ const DEEPSEEK_VARIANTS: Record<string, ModelVariant> = {
   },
 };
 
+const GLM_5_2_REASONING_VARIANTS: Record<string, ModelVariant> = {
+  high: {
+    id: "high",
+    label: "reasoning effort: high",
+    providerOptions: { reasoning_effort: "high" },
+  },
+  max: {
+    id: "max",
+    label: "reasoning effort: max",
+    providerOptions: { reasoning_effort: "max" },
+  },
+};
+
 const FABLE_5_EFFORT_VARIANTS: Record<string, ModelVariant> = {
   low: {
     id: "low",
@@ -377,6 +390,18 @@ export const MODEL_METADATA: Record<string, ModelMetadata> = {
     supportsImages: false,
     variants: DEEPSEEK_VARIANTS,
     pricing: ZERO_PRICING,
+  },
+  "opencode/glm-5.2": {
+    contextWindow: 1_000_000,
+    maxOutputTokens: 131_072,
+    supportsImages: false,
+    variants: GLM_5_2_REASONING_VARIANTS,
+    pricing: {
+      inputPerMTok: 1.40,
+      cacheWritePerMTok: 0,
+      cacheReadPerMTok: 0.26,
+      outputPerMTok: 4.40,
+    },
   },
   "fireworks/kimi-k2.6": {
     contextWindow: 262_144,
