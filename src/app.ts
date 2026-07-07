@@ -54,6 +54,7 @@ import type {
   ToolResultContent,
   ToolResultPart,
   ImageBlock,
+  ProviderMessage,
 } from "./provider";
 import {
   MODELS,
@@ -402,7 +403,8 @@ let pasteInFlight = false;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
 /** Anthropic total request limit in bytes. */
-const MAX_REQUEST_BYTES = 32 * 1024 * 1024;
+const MAX_REQUEST_BYTES = 10 * 1024 * 1024;
+const REQUEST_IMAGE_PAYLOAD_WARNING_RATIO = 0.8;
 
 /** Image file extensions we recognize. */
 const IMAGE_EXTENSIONS: Record<string, SupportedImageMediaType> = {
@@ -433,19 +435,96 @@ function expandHomePath(p: string): string {
   return p;
 }
 
-/** Estimate total base64 image payload already present in the conversation. */
-function estimateExistingImagePayload(): number {
-  let total = 0;
-  for (const msg of sessionToProviderMessages(activeSession)) {
-    if (msg.role === "user") {
-      for (const block of msg.content) {
-        if (block.type === "image") {
-          total += block.data.length;
+const OMITTED_IMAGE_PLACEHOLDER = "[older image omitted to keep the provider request under the size limit]";
+
+type ImageCapResult = {
+  messages: ProviderMessage[];
+  droppedImages: number;
+  droppedBytes: number;
+};
+
+/**
+ * Keep newest images within a base64 byte budget, replacing older images with
+ * text placeholders. This is non-destructive: saved session history keeps the
+ * original image data for UI/history, while outbound provider requests avoid
+ * accumulating screenshots forever.
+ */
+function capProviderMessageImages(messages: readonly ProviderMessage[], budgetBytes: number): ImageCapResult {
+  const imagesToDrop = new Set<ImageBlock>();
+  let keptBytes = 0;
+  let droppedBytes = 0;
+
+  for (let msgIndex = messages.length - 1; msgIndex >= 0; msgIndex--) {
+    const msg = messages[msgIndex];
+    if (msg.role !== "user") {
+      continue;
+    }
+
+    for (let blockIndex = msg.content.length - 1; blockIndex >= 0; blockIndex--) {
+      const block = msg.content[blockIndex];
+      if (block.type === "image") {
+        if (keptBytes + block.data.length <= budgetBytes) {
+          keptBytes += block.data.length;
+        } else {
+          imagesToDrop.add(block);
+          droppedBytes += block.data.length;
+        }
+      } else if (block.type === "tool_result") {
+        for (let partIndex = block.content.length - 1; partIndex >= 0; partIndex--) {
+          const part = block.content[partIndex];
+          if (part.type !== "image") {
+            continue;
+          }
+          if (keptBytes + part.data.length <= budgetBytes) {
+            keptBytes += part.data.length;
+          } else {
+            imagesToDrop.add(part);
+            droppedBytes += part.data.length;
+          }
         }
       }
     }
   }
-  return total;
+
+  if (imagesToDrop.size === 0) {
+    return { messages: [...messages], droppedImages: 0, droppedBytes: 0 };
+  }
+
+  const cappedMessages = messages.map((msg): ProviderMessage => {
+    if (msg.role !== "user") {
+      return msg;
+    }
+
+    let changed = false;
+    const content = msg.content.map((block) => {
+      if (block.type === "image" && imagesToDrop.has(block)) {
+        changed = true;
+        return { type: "text" as const, text: OMITTED_IMAGE_PLACEHOLDER };
+      }
+
+      if (block.type === "tool_result") {
+        let toolResultChanged = false;
+        const toolResultContent = block.content.map((part) => {
+          if (part.type === "image" && imagesToDrop.has(part)) {
+            toolResultChanged = true;
+            return { type: "text" as const, text: OMITTED_IMAGE_PLACEHOLDER };
+          }
+          return part;
+        });
+
+        if (toolResultChanged) {
+          changed = true;
+          return { ...block, content: toolResultContent };
+        }
+      }
+
+      return block;
+    });
+
+    return changed ? { ...msg, content } : msg;
+  });
+
+  return { messages: cappedMessages, droppedImages: imagesToDrop.size, droppedBytes };
 }
 
 /** Estimate total pending + new image payload in base64 bytes. */
@@ -1240,11 +1319,10 @@ async function handlePasteImage(): Promise<void> {
 
     const base64Data = clipboardImage.data.toString("base64");
     const encodedSize = base64Data.length;
-    const existingPayload = estimateExistingImagePayload();
     const pendingPayload = estimatePendingImagePayload();
 
-    if (existingPayload + pendingPayload + encodedSize > MAX_REQUEST_BYTES) {
-      tui.setStatus("Total image payload too large — consider /new");
+    if (pendingPayload + encodedSize > MAX_REQUEST_BYTES * REQUEST_IMAGE_PAYLOAD_WARNING_RATIO) {
+      tui.setStatus("Attached images too large — use fewer/smaller images");
       return;
     }
 
@@ -1368,14 +1446,14 @@ async function parseUserInput(raw: string): Promise<ParsedUserInput> {
     }
   }
 
-  // Check aggregate size
-  const existingPayload = estimateExistingImagePayload();
+  // Check aggregate size of newly attached images. Older conversation images
+  // are capped non-destructively before provider requests are sent.
   let newPayload = 0;
   for (const img of images) {
     newPayload += estimateBase64Size(img.rawSize);
   }
-  if (existingPayload + newPayload > MAX_REQUEST_BYTES) {
-    return { displayText: raw, contentBlocks: [], error: "Total image payload too large. Start /new or remove images." };
+  if (newPayload > MAX_REQUEST_BYTES * REQUEST_IMAGE_PAYLOAD_WARNING_RATIO) {
+    return { displayText: raw, contentBlocks: [], error: "Attached images are too large. Use fewer or smaller images." };
   }
 
   // Build content blocks — images before text (Anthropic recommendation)
@@ -1618,20 +1696,9 @@ async function handleUserInput(userMessage: string) {
       return;
     }
 
-    // Check existing image payload in conversation history
-    if (hasImages) {
-      const existingPayload = estimateExistingImagePayload();
-      if (existingPayload > MAX_REQUEST_BYTES * 0.8) {
-        tui.addBlock({
-          role: "error",
-          title: "Error",
-          content: "Conversation image payload is too large. Start /new or use fewer images.",
-        });
-        promptRunning = false;
-        tui.setRunning(false, "idle");
-        return;
-      }
-    }
+    // Older conversation images are capped non-destructively before provider
+    // requests are sent, so text-only turns can continue even after many
+    // screenshots have accumulated in saved history.
 
     // Clear pending images on successful parse
     pendingImages = [];
@@ -1693,6 +1760,7 @@ async function prompt(
   let completedToolResults = new Map<string, ToolResultContent>();
   let acceptToolResults = true;
   let currentToolBlocks = new Map<string, number>();
+  let imageCapNoticeShown = false;
 
   const appendToolResultToDraft = (toolResult: ToolResultContent) => {
     appendTurnDraftEntry(turnDraft, createToolResultEntry({
@@ -1743,10 +1811,23 @@ async function prompt(
     while (true) {
       tui.setStatus("Thinking");
 
+      const imageCap = capProviderMessageImages(
+        sessionToProviderMessages(activeSession, turnDraft),
+        MAX_REQUEST_BYTES * REQUEST_IMAGE_PAYLOAD_WARNING_RATIO,
+      );
+      if (imageCap.droppedImages > 0 && !imageCapNoticeShown) {
+        imageCapNoticeShown = true;
+        tui.addBlock({
+          role: "assistant",
+          title: "Context images omitted",
+          content: `${imageCap.droppedImages} older image${imageCap.droppedImages === 1 ? "" : "s"} (${(imageCap.droppedBytes / (1024 * 1024)).toFixed(1)} MB base64) omitted from this provider request to stay under the request-size limit. Saved session history is unchanged.`,
+        });
+      }
+
       const stream: ProviderStream = await provider.stream({
         model: modelConfig.providerModel,
         system: systemText,
-        messages: sessionToProviderMessages(activeSession, turnDraft),
+        messages: imageCap.messages,
         tools: toolDefs,
         maxTokens: modelConfig.maxOutputTokens,
         providerOptions: {

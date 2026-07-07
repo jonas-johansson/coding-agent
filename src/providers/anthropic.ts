@@ -15,6 +15,8 @@ import type {
   UsageInfo,
 } from "../provider";
 
+const MAX_REQUEST_BODY_BYTES = 10 * 1024 * 1024;
+
 // ── Provider metadata ────────────────────────────────────────────────────────
 
 /**
@@ -186,17 +188,27 @@ export class AnthropicProvider implements Provider {
     const thinking = anthropicThinkingOption(params.providerOptions);
     const outputConfig = anthropicOutputConfigOption(params.providerOptions);
 
+    const requestBody: Anthropic.MessageCreateParams = {
+      model: params.model,
+      max_tokens: params.maxTokens,
+      system: systemPrompt,
+      messages: toAnthropicMessages(params.messages),
+      tools: toAnthropicTools(params.tools),
+      cache_control: { type: "ephemeral" },
+      ...(thinking && { thinking }),
+      ...(outputConfig && { output_config: outputConfig }),
+    };
+
+    const requestBodyBytes = Buffer.byteLength(JSON.stringify(requestBody), "utf8");
+    if (requestBodyBytes > MAX_REQUEST_BODY_BYTES) {
+      throw new Error(
+        `Anthropic request body is too large (${(requestBodyBytes / (1024 * 1024)).toFixed(1)} MB; limit ${(MAX_REQUEST_BODY_BYTES / (1024 * 1024)).toFixed(0)} MB). ` +
+        "This is usually caused by large images in the conversation history. Start /new, /undo recent image reads, or use fewer/smaller images.",
+      );
+    }
+
     const anthropicStream = await this.client.messages.stream(
-      {
-        model: params.model,
-        max_tokens: params.maxTokens,
-        system: systemPrompt,
-        messages: toAnthropicMessages(params.messages),
-        tools: toAnthropicTools(params.tools),
-        cache_control: { type: "ephemeral" },
-        ...(thinking && { thinking }),
-        ...(outputConfig && { output_config: outputConfig }),
-      },
+      requestBody,
       { signal: params.signal },
     );
 
