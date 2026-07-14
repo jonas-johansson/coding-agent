@@ -57,11 +57,11 @@ import type {
   ProviderMessage,
 } from "./provider";
 import {
-  MODELS,
-  AVAILABLE_MODEL_IDS,
   DEFAULT_MODEL_ID,
+  getAvailableModelIds,
   getModelConfig,
   getModelVariant,
+  getModels,
   parseModelSelection,
   formatModelSelection,
   type ModelConfig,
@@ -77,6 +77,7 @@ import { setTuiTheme } from "./tui";
 import { setShikiTheme } from "./syntax";
 import { detectTerminalBackground } from "./terminal-utils";
 import { loadPreferences, savePreferences } from "./preferences";
+import { loadCachedModelCatalog, refreshModelCatalog } from "./model-catalog";
 import {
   initMcpServers,
   shutdownMcpServers,
@@ -249,7 +250,7 @@ let activeSession = createSession(process.cwd(), currentModelId);
 type ResolvedModelVariant = ModelVariant & { id: string };
 
 function currentModelConfig(): ModelConfig {
-  return getModelConfig(currentModelId) ?? MODELS[DEFAULT_MODEL_ID];
+  return getModelConfig(currentModelId) ?? getModels()[DEFAULT_MODEL_ID];
 }
 
 function currentModelVariantId(): string | undefined {
@@ -339,20 +340,20 @@ const tui = new Tui({
   ],
   fileSuggestions: getProjectFiles,
   modelOverlay: {
-    list: () => AVAILABLE_MODEL_IDS.map((id) => {
-      const config = MODELS[id];
+    list: () => getAvailableModelIds().map((id) => {
+      const config = getModelConfig(id);
       return {
         id,
-        contextWindow: config.contextWindow,
-        supportsImages: config.supportsImages,
-        inputPerMTok: config.pricing.inputPerMTok,
-        outputPerMTok: config.pricing.outputPerMTok,
+        contextWindow: config?.contextWindow ?? 0,
+        supportsImages: config?.supportsImages ?? false,
+        inputPerMTok: config?.pricing.inputPerMTok ?? 0,
+        outputPerMTok: config?.pricing.outputPerMTok ?? 0,
       };
     }),
     initialSelected: () => Array.from(new Set(cycleModelSelections.map((selection) => selection.modelId))),
     onPick: (id) => selectModel(id),
     onCycleChange: (ids) => {
-      cycleModelSelections = (ids.length > 0 ? ids : AVAILABLE_MODEL_IDS).map((modelId) => ({ modelId }));
+      cycleModelSelections = (ids.length > 0 ? ids : getAvailableModelIds()).map((modelId) => ({ modelId }));
       schedulePreferenceSave();
     },
   },
@@ -803,7 +804,10 @@ function maybeGenerateSessionTitleFromFirstMessage(
         }],
         tools: [],
         maxTokens: 32,
-        ...(modelVariant?.providerOptions && { providerOptions: modelVariant.providerOptions }),
+        providerOptions: {
+          ...(modelConfig.providerOptions ?? {}),
+          ...(modelVariant?.providerOptions ?? {}),
+        },
       });
 
       for await (const _event of stream) {
@@ -2112,6 +2116,12 @@ async function main() {
   const startupErrors: Array<{ title: string; content: string }> = [];
 
   try {
+    await loadCachedModelCatalog();
+  } catch (error) {
+    startupErrors.push({ title: "Model catalog", content: formatError(error) });
+  }
+
+  try {
     const paceConfig = await loadPaceConfig();
     tui.setCostDisplayConfig(paceConfig.cost);
     applyConfiguredModels(paceConfig);
@@ -2154,6 +2164,16 @@ async function main() {
   for (const { title, content } of startupErrors) {
     tui.addBlock({ role: "error", title, content });
   }
+
+  void refreshModelCatalog()
+    .then((result) => {
+      if (result && result.addedModelIds.length > 0) {
+        tui.setStatus(`Model catalog updated: ${result.addedModelIds.length} new model(s) available`);
+      }
+    })
+    .catch((error) => {
+      tui.setStatus(`Model catalog refresh failed: ${formatErrorMessage(error)}`);
+    });
 
   // Initialise Shiki in the background. The hand-rolled tokenizer remains
   // active until the promise resolves, then Shiki takes over automatically.

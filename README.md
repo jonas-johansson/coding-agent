@@ -43,7 +43,9 @@ export FIREWORKS_API_KEY=...           # fireworks/* models
 
 Switch models at any time with **Tab** or `/model <model-id>`. Model IDs use the full `provider/model` string. Models default to an unset variant, so Pace sends no explicit reasoning effort, thinking level, or similar provider-native options unless you select a variant. For models with variants, use **Ctrl+T** or `/variant <variant>` to cycle provider-native options such as OpenAI reasoning effort; the cycle includes the unset variant.
 
-| Model ID |
+Pace ships with a curated built-in model catalog and also loads new models from [models.dev](https://models.dev) into the model picker. Built-in metadata and variants win for known models; fetched metadata adds models that Pace does not already know about.
+
+| Built-in Model ID |
 |---|
 | `anthropic/claude-haiku-4-5` |
 | `anthropic/claude-sonnet-4-6` |
@@ -55,11 +57,26 @@ Switch models at any time with **Tab** or `/model <model-id>`. Model IDs use the
 | `opencode/claude-opus-4-6` |
 | `opencode/claude-opus-4-7` |
 | `opencode/claude-opus-4-8` |
+| `opencode/claude-fable-5` |
 | `opencode/kimi-k2.6` |
+| `opencode/kimi-k2.7-code` |
+| `opencode/deepseek-v4-pro` |
+| `opencode/deepseek-v4-flash` |
+| `opencode/deepseek-v4-flash-free` |
 | `opencode/glm-5.2` |
-| `opencode/gpt-5.5` |
 | `fireworks/kimi-k2.6` |
+| `fireworks/kimi-k2.7-code` |
+| `opencode/gpt-5.5` |
 | `openai/gpt-5.5` |
+| `lmstudio/google/gemma-4-12b` |
+
+Model catalog environment variables:
+
+| Variable | Description |
+|---|---|
+| `PACE_MODELS_URL` | Override the models.dev source URL. Defaults to `https://models.dev`. |
+| `PACE_MODELS_PATH` | Read/write a specific catalog JSON file instead of the default cache path. |
+| `PACE_DISABLE_MODELS_FETCH` | Set to `1`, `true`, or `yes` to disable network refreshes. |
 
 ## Keyboard shortcuts
 

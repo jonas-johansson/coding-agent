@@ -25,6 +25,8 @@ export type ModelMetadata = {
   maxOutputTokens: number;
   supportsImages: boolean;
   pricing: PricingConfig;
+  /** Provider API model id when it differs from the user-facing model id. */
+  providerModel?: string;
   /** Provider-native request options always applied for this model. */
   providerOptions?: Record<string, unknown>;
   longContextPricing?: {
@@ -547,8 +549,8 @@ export function getModelConfig(id: string): ModelConfig | undefined {
   const parsed = parseModelId(id);
   if (!parsed) return undefined;
 
-  const metadata = MODEL_METADATA[id] ?? DEFAULT_MODEL_METADATA_BY_PROVIDER[parsed.provider];
-  return { ...metadata, ...parsed };
+  const metadata = runtimeModelMetadata[id] ?? DEFAULT_MODEL_METADATA_BY_PROVIDER[parsed.provider];
+  return { ...metadata, ...parsed, providerModel: metadata.providerModel ?? parsed.providerModel };
 }
 
 export type ModelSelection = {
@@ -586,20 +588,48 @@ export function parseModelSelection(input: string): ModelSelection | undefined {
   return undefined;
 }
 
-function createModels(): Record<string, ModelConfig> {
+let runtimeModelMetadata: Record<string, ModelMetadata> = { ...MODEL_METADATA };
+
+function createModels(metadata: Record<string, ModelMetadata> = runtimeModelMetadata): Record<string, ModelConfig> {
   return Object.fromEntries(
-    Object.keys(MODEL_METADATA).map((id) => {
+    Object.keys(metadata).map((id) => {
       const config = getModelConfig(id);
       if (!config) {
-        throw new Error(`Invalid built-in model id: ${id}`);
+        throw new Error(`Invalid model id: ${id}`);
       }
       return [id, config];
     }),
   );
 }
 
-export const MODELS: Record<string, ModelConfig> = createModels();
-
-export const AVAILABLE_MODEL_IDS = Object.keys(MODELS);
+let runtimeModels: Record<string, ModelConfig> = createModels();
 
 export const DEFAULT_MODEL_ID = "opencode/kimi-k2.6";
+
+/**
+ * Replace the remote portion of the runtime catalog. Built-in model metadata is
+ * always retained and wins over remote metadata for known ids.
+ */
+export function applyRemoteModelMetadata(remoteMetadata: Record<string, ModelMetadata>): { addedModelIds: string[]; totalModelCount: number } {
+  const previousIds = new Set(Object.keys(runtimeModelMetadata));
+  const nextMetadata: Record<string, ModelMetadata> = { ...MODEL_METADATA };
+
+  for (const [id, metadata] of Object.entries(remoteMetadata)) {
+    if (MODEL_METADATA[id]) continue;
+    nextMetadata[id] = metadata;
+  }
+
+  runtimeModelMetadata = nextMetadata;
+  runtimeModels = createModels();
+
+  const addedModelIds = Object.keys(runtimeModelMetadata).filter((id) => !previousIds.has(id));
+  return { addedModelIds, totalModelCount: Object.keys(runtimeModelMetadata).length };
+}
+
+export function getModels(): Record<string, ModelConfig> {
+  return runtimeModels;
+}
+
+export function getAvailableModelIds(): string[] {
+  return Object.keys(runtimeModels);
+}
