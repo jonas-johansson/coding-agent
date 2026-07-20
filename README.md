@@ -60,6 +60,7 @@ Pace ships with a curated built-in model catalog and also loads new models from 
 | `opencode/claude-fable-5` |
 | `opencode/kimi-k2.6` |
 | `opencode/kimi-k2.7-code` |
+| `opencode/kimi-k3` |
 | `opencode/deepseek-v4-pro` |
 | `opencode/deepseek-v4-flash` |
 | `opencode/deepseek-v4-flash-free` |

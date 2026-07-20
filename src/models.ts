@@ -117,6 +117,24 @@ const KIMI_VARIANTS: Record<string, ModelVariant> = {
   },
 };
 
+const KIMI_K3_VARIANTS: Record<string, ModelVariant> = {
+  low: {
+    id: "low",
+    label: "reasoning effort: low",
+    providerOptions: { reasoning_effort: "low" },
+  },
+  high: {
+    id: "high",
+    label: "reasoning effort: high",
+    providerOptions: { reasoning_effort: "high" },
+  },
+  max: {
+    id: "max",
+    label: "reasoning effort: max",
+    providerOptions: { reasoning_effort: "max" },
+  },
+};
+
 const DEEPSEEK_VARIANTS: Record<string, ModelVariant> = {
   think: {
     id: "think",
@@ -360,6 +378,18 @@ export const MODEL_METADATA: Record<string, ModelMetadata> = {
       cacheWritePerMTok: 0,
       cacheReadPerMTok: 0.19,
       outputPerMTok: 4.00,
+    },
+  },
+  "opencode/kimi-k3": {
+    contextWindow: 1_048_576,
+    maxOutputTokens: 1_048_576,
+    supportsImages: true,
+    variants: KIMI_K3_VARIANTS,
+    pricing: {
+      inputPerMTok: 3.00,
+      cacheWritePerMTok: 0,
+      cacheReadPerMTok: 0.30,
+      outputPerMTok: 15.00,
     },
   },
   "opencode/deepseek-v4-pro": {

@@ -198,6 +198,24 @@ async function getProvider(config: ModelConfig): Promise<Provider> {
         }
         return openCodeGoProvider;
       }
+      if (config.providerModel === "kimi-k3") {
+        // Kimi K3 is served by the OpenCode Go Chat Completions endpoint,
+        // not the regular Zen endpoint.
+        if (!openCodeGoProvider) {
+          const apiKey = process.env.OPENCODE_GO_API_KEY ?? process.env.OPENCODE_ZEN_API_KEY ?? process.env.OPENCODE_API_KEY;
+          if (!apiKey) {
+            throw new Error(
+              "Missing API key for OpenCode Go. Set the OPENCODE_GO_API_KEY, OPENCODE_ZEN_API_KEY, or OPENCODE_API_KEY environment variable.",
+            );
+          }
+          const { OpenCodeZenProvider } = await import("./providers/opencode-zen");
+          openCodeGoProvider = new OpenCodeZenProvider({
+            apiKey,
+            baseUrl: process.env.OPENCODE_GO_BASE_URL ?? "https://opencode.ai/zen/go/v1",
+          });
+        }
+        return openCodeGoProvider;
+      }
       if (!openCodeZenProvider) {
         const { OpenCodeZenProvider } = await import("./providers/opencode-zen");
         openCodeZenProvider = new OpenCodeZenProvider();
@@ -233,6 +251,7 @@ async function getProvider(config: ModelConfig): Promise<Provider> {
 let currentModelId: string = DEFAULT_MODEL_ID;
 const lastVariantByModelId = new Map<string, string>();
 let cycleModelSelections: ModelSelection[] = [
+  { modelId: "opencode/kimi-k3" },
   { modelId: "opencode/kimi-k2.7-code" },
   { modelId: "opencode/kimi-k2.6" },
   { modelId: "opencode/glm-5.2" },
