@@ -9,4 +9,4 @@ Make edit tool fail if the file has been updated since the last write, edit, or 
 
 
 
-Show current git branch with pwd in the status bar. Example: ~/myproj:session-feature
+Compaction

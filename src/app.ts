@@ -3,6 +3,7 @@ import { existsSync } from "fs";
 import { homedir } from "os";
 import { join, resolve, extname } from "path";
 import { Tui, formatSessionCost } from "./tui";
+import { getGitBranch } from "./git.js";
 import { sessionToRenderBlocks, sessionToTreeOverlayEntries } from "./session-view";
 import { reasoningDisplayContent, reasoningDisplayTitle, reasoningTitle } from "./reasoning";
 import {
@@ -396,6 +397,7 @@ const tui = new Tui({
   },
   model: DEFAULT_MODEL_ID,
   cwd: process.cwd(),
+  gitBranch: getGitBranch(process.cwd()) ?? "",
 });
 
 let promptRunning = false;
@@ -699,6 +701,7 @@ async function resumeSessionById(sessionId: string) {
 
 function refreshCwd() {
   tui.setCwd(process.cwd());
+  tui.setGitBranch(getGitBranch(process.cwd()) ?? "");
 }
 
 function rebuildTuiFromSession() {

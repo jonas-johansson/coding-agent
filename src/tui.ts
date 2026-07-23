@@ -245,6 +245,7 @@ export class Tui {
   private cost = 0;
   private costDisplayConfig: CostDisplayConfig = DEFAULT_COST_DISPLAY_CONFIG;
   private cwd = "";
+  private gitBranch = "";
 
   // ── Performance: block-level render cache (P0) ──
   private blockRenderCache = new Map<number, BlockRenderCacheEntry>();
@@ -300,9 +301,10 @@ export class Tui {
   private treeOverlayItems: TreeOverlayItem[] = [];
   private treeOverlayExpanded = new Set<string>();
 
-  constructor(private readonly options: { onSubmit?: SubmitHandler; onTab?: () => void; onShiftTab?: () => void; onCycleVariant?: () => void; onEscape?: () => void; onExit?: () => void | Promise<void>; onPasteImage?: () => void | Promise<void>; slashCommands?: SuggestionProvider; fileSuggestions?: FileSuggestionProvider; modelOverlay?: ModelOverlayOptions; sessionOverlay?: SessionOverlayOptions; treeOverlay?: TreeOverlayOptions; model?: string; cwd?: string } = {}) {
+  constructor(private readonly options: { onSubmit?: SubmitHandler; onTab?: () => void; onShiftTab?: () => void; onCycleVariant?: () => void; onEscape?: () => void; onExit?: () => void | Promise<void>; onPasteImage?: () => void | Promise<void>; slashCommands?: SuggestionProvider; fileSuggestions?: FileSuggestionProvider; modelOverlay?: ModelOverlayOptions; sessionOverlay?: SessionOverlayOptions; treeOverlay?: TreeOverlayOptions; model?: string; cwd?: string; gitBranch?: string } = {}) {
     this.model = options.model ?? "";
     this.cwd = options.cwd ?? "";
+    this.gitBranch = options.gitBranch ?? "";
     this.slashItems = options.slashCommands ? options.slashCommands() : [];
 
     // When Shiki finishes loading, flush the render cache so code blocks get
@@ -452,6 +454,11 @@ export class Tui {
 
   setCwd(cwd: string) {
     this.cwd = cwd;
+    this.requestRender();
+  }
+
+  setGitBranch(branch: string) {
+    this.gitBranch = branch;
     this.requestRender();
   }
 
@@ -2676,7 +2683,8 @@ export class Tui {
     const contextText = this.contextInfo ? `  ${formatContextInfo(this.contextInfo)}  ` : "";
     const modelText = this.model ? `  ${this.model}  ` : "";
     const home = homedir();
-    const displayCwd = this.cwd && this.cwd.startsWith(home) ? "~" + this.cwd.slice(home.length) : this.cwd;
+    let displayCwd = this.cwd && this.cwd.startsWith(home) ? "~" + this.cwd.slice(home.length) : this.cwd;
+    if (displayCwd && this.gitBranch) displayCwd = `${displayCwd}:${this.gitBranch}`;
     const cwdText = displayCwd ? `  ${displayCwd}  ` : "";
     const horizontalPadding = Math.min(INPUT_HORIZONTAL_PADDING, Math.floor((columns - 1) / 2));
     const rightWidth = displayWidth(cwdText) + displayWidth(costText) + displayWidth(contextText) + displayWidth(modelText);
