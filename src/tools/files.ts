@@ -2,6 +2,7 @@ import { mkdir, readFile, stat, writeFile } from "fs/promises";
 import { dirname, extname } from "path";
 import { z } from "zod";
 import { defineTool, throwIfAborted, type ToolOutput } from "./core";
+import { checkFileState, recordFileState } from "./file-state";
 import { expandHomePath, normalizePath } from "./path";
 
 /** Maximum raw image file size accepted by the read tool (matches Anthropic's per-image limit). */
@@ -62,12 +63,15 @@ export const readTool = defineTool({
         };
       }
       const data = await readFile(filePath);
+      recordFileState(filePath, data);
       return {
         content: [{ type: "image", source: { type: "base64", media_type: imageMediaType, data: data.toString("base64") } }],
       };
     }
 
-    const fullText = await readFile(filePath, 'utf8');
+    const fileBytes = await readFile(filePath);
+    recordFileState(filePath, fileBytes);
+    const fullText = fileBytes.toString("utf8");
     const allLines = fullText.split("\n");
     const totalLines = allLines.length;
 
@@ -134,8 +138,34 @@ export const writeTool = defineTool({
   execute: async (input, signal): Promise<ToolOutput> => {
     throwIfAborted(signal);
     const filePath = expandHomePath(input.path);
+
+    // Overwriting an existing file requires a fresh snapshot from a prior
+    // read, write, or edit, so external changes are never silently clobbered.
+    let existingBytes: Buffer | null = null;
+    try {
+      existingBytes = await readFile(filePath);
+    } catch (error) {
+      if ((error as { code?: string }).code !== "ENOENT") throw error;
+    }
+    if (existingBytes !== null) {
+      const freshness = checkFileState(filePath, existingBytes);
+      if (freshness === "unread") {
+        return {
+          content: [{ type: "text", text: `File has not been read yet in this session: ${input.path}. Read it before overwriting.` }],
+          is_error: true,
+        };
+      }
+      if (freshness === "stale") {
+        return {
+          content: [{ type: "text", text: `File has been modified externally since it was last read, written, or edited: ${input.path}. Read it again before overwriting.` }],
+          is_error: true,
+        };
+      }
+    }
+
     await mkdir(dirname(filePath), { recursive: true });
     await writeFile(filePath, input.content);
+    recordFileState(filePath, input.content);
     return {
       content: [{ type: "text", text: `Wrote file` }]
     }
@@ -156,9 +186,26 @@ export const editTool = defineTool({
   execute: async (input, signal): Promise<ToolOutput> => {
     throwIfAborted(signal);
     const filePath = expandHomePath(input.path);
-    const oldFileData = await readFile(filePath, 'utf8');
+    const fileBytes = await readFile(filePath);
+
+    const freshness = checkFileState(filePath, fileBytes);
+    if (freshness === "unread") {
+      return {
+        content: [{ type: "text", text: `File has not been read yet in this session: ${input.path}. Read it before editing.` }],
+        is_error: true,
+      };
+    }
+    if (freshness === "stale") {
+      return {
+        content: [{ type: "text", text: `File has been modified externally since it was last read, written, or edited: ${input.path}. Read it again before editing.` }],
+        is_error: true,
+      };
+    }
+
+    const oldFileData = fileBytes.toString("utf8");
     const newFileData = oldFileData.replaceAll(input.oldText, input.newText);
     await writeFile(filePath, newFileData);
+    recordFileState(filePath, newFileData);
     return {
       content: [{ type: "text", text: `Edited file` }]
     }
