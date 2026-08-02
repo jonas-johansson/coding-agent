@@ -19,8 +19,9 @@ import type {
 const DEFAULT_BASE_URL = "https://api.fireworks.ai/inference/v1";
 
 /**
- * Maps provider model IDs to the Fireworks API model identifiers.
- * Add new entries here when onboarding additional Fireworks-hosted models.
+ * Maps curated provider model ID aliases to the Fireworks API model
+ * identifiers. Fully-qualified Fireworks paths ("accounts/...") — e.g. models
+ * surfaced by the dynamic model catalog — pass through without an entry here.
  */
 const FIREWORKS_MODEL_MAP: Record<string, string> = {
   "kimi-k2.6": "accounts/fireworks/models/kimi-k2p6",
@@ -293,7 +294,8 @@ export class FireworksProvider implements Provider {
     providerOptions?: Record<string, unknown>;
     signal?: AbortSignal;
   }): Promise<ProviderStream> {
-    const fireworksModel = FIREWORKS_MODEL_MAP[params.model];
+    const fireworksModel = FIREWORKS_MODEL_MAP[params.model]
+      ?? (params.model.startsWith("accounts/") ? params.model : undefined);
     if (!fireworksModel) {
       throw new Error(
         `Unknown Fireworks model mapping for "${params.model}". ` +
