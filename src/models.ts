@@ -400,7 +400,7 @@ export const MODEL_METADATA: Record<string, ModelMetadata> = {
     pricing: {
       inputPerMTok: 1.74,
       cacheWritePerMTok: 0,
-      cacheReadPerMTok: 0.0145,
+      cacheReadPerMTok: 0.145,
       outputPerMTok: 3.48,
     },
   },
@@ -412,13 +412,13 @@ export const MODEL_METADATA: Record<string, ModelMetadata> = {
     pricing: {
       inputPerMTok: 0.14,
       cacheWritePerMTok: 0,
-      cacheReadPerMTok: 0.0028,
+      cacheReadPerMTok: 0.028,
       outputPerMTok: 0.28,
     },
   },
   "opencode/deepseek-v4-flash-free": {
-    contextWindow: 1_000_000,
-    maxOutputTokens: 384_000,
+    contextWindow: 200_000,
+    maxOutputTokens: 128_000,
     supportsImages: false,
     variants: DEEPSEEK_VARIANTS,
     pricing: ZERO_PRICING,

@@ -180,10 +180,16 @@ async function getProvider(config: ModelConfig): Promise<Provider> {
         }
         return openCodeZenOpenAIProvider;
       }
-      if (config.providerModel.startsWith("deepseek-v4-") && !config.providerModel.endsWith("-free")) {
-        // DeepSeek V4 paid models are served by the OpenCode Go
-        // Chat Completions endpoint. Free variants use the regular Zen
-        // Chat Completions endpoint instead.
+      if (
+        config.providerModel.startsWith("deepseek-v4-") &&
+        !config.providerModel.endsWith("-free") &&
+        (process.env.OPENCODE_GO_API_KEY ?? process.env.OPENCODE_GO_BASE_URL)
+      ) {
+        // DeepSeek V4 paid models are served by the regular Zen Chat
+        // Completions endpoint. The OpenCode Go endpoint hosts them in China
+        // and requires explicit workspace opt-in, so it is only used when Go
+        // is explicitly configured via OPENCODE_GO_API_KEY or
+        // OPENCODE_GO_BASE_URL. Free variants always use the Zen endpoint.
         if (!openCodeGoProvider) {
           const apiKey = process.env.OPENCODE_GO_API_KEY ?? process.env.OPENCODE_ZEN_API_KEY ?? process.env.OPENCODE_API_KEY;
           if (!apiKey) {
