@@ -2376,6 +2376,18 @@ export class Tui {
       return isInlineTool(b) ? "inline-tool" : "panel";
     };
 
+    // Visual type of the next block that renders at least one line. Blocks
+    // that render nothing (e.g. an assistant text block that only contains
+    // whitespace) are skipped so they cannot suppress trailing margins.
+    const nextVisibleType = (fromIndex: number): VisualType | undefined => {
+      for (let i = fromIndex + 1; i < this.blocks.length; i++) {
+        if (!blockRendersEmpty(this.blocks[i])) {
+          return visualType(this.blocks[i]);
+        }
+      }
+      return undefined;
+    };
+
     let prevType: VisualType | undefined;
     for (let blockIdx = 0; blockIdx < this.blocks.length; blockIdx++) {
       const block = this.blocks[blockIdx];
@@ -2456,10 +2468,11 @@ export class Tui {
       }
 
       // Trailing margin after assistant blocks — skip only if the next
-      // block is another assistant (which will add its own leading margin).
+      // visible block is another assistant (which will add its own leading
+      // margin). Empty blocks are transparent so whitespace-only text after
+      // reasoning does not suppress the margin.
       if (curType === "assistant") {
-        const nextBlock = blockIdx < this.blocks.length - 1 ? this.blocks[blockIdx + 1] : undefined;
-        const nextType = nextBlock ? visualType(nextBlock) : undefined;
+        const nextType = nextVisibleType(blockIdx);
         if (nextType !== "assistant") {
           renderedBlocks.push(blackLine(columns));
           blockLineMap.push(0);
@@ -2470,8 +2483,7 @@ export class Tui {
       // bottom margin after the last consecutive inline tool so there
       // is visual separation from the input box or the next block.
       if (curType === "inline-tool") {
-        const nextBlock = blockIdx < this.blocks.length - 1 ? this.blocks[blockIdx + 1] : undefined;
-        const nextType = nextBlock ? visualType(nextBlock) : undefined;
+        const nextType = nextVisibleType(blockIdx);
         if (nextType !== "inline-tool" && nextType !== "panel" && nextType !== "error" && nextType !== "assistant") {
           renderedBlocks.push(blackLine(columns));
           blockLineMap.push(0);
@@ -3156,6 +3168,19 @@ function updateActiveStyle(activeStyle: string, sequence: string) {
   }
 
   return activeStyle + sequence;
+}
+
+/**
+ * True when a block renders zero lines and is skipped by the render loop.
+ * Currently only assistant blocks without a title whose content is empty or
+ * whitespace-only render nothing (see renderAssistantBlock).
+ */
+function blockRendersEmpty(block: RenderBlock): boolean {
+  if (block.role !== "assistant" || block.title) {
+    return false;
+  }
+  const content = sanitizeContent(block.content).trimStart().replace(/\n+$/, "");
+  return !content;
 }
 
 /**
