@@ -109,7 +109,11 @@ function isFireworksMetadata(v: unknown): v is FireworksMetadata {
 
 // ── Message translation ─────────────────────────────────────────────────────
 
-function toOaiMessages(system: string, messages: ProviderMessage[]): OaiMessage[] {
+function toOaiMessages(
+  system: string,
+  messages: ProviderMessage[],
+  supportsImages: boolean,
+): OaiMessage[] {
   const result: OaiMessage[] = [{ role: "system", content: system }];
 
   for (const msg of messages) {
@@ -125,33 +129,50 @@ function toOaiMessages(system: string, messages: ProviderMessage[]): OaiMessage[
         if (block.type === "text") {
           contentParts.push({ type: "text", text: block.text });
         } else if (block.type === "image") {
-          hasImages = true;
-          contentParts.push({
-            type: "image_url",
-            image_url: {
-              url: `data:${block.mediaType};base64,${block.data}`,
-              detail: "auto",
-            },
-          });
+          if (supportsImages) {
+            hasImages = true;
+            contentParts.push({
+              type: "image_url",
+              image_url: {
+                url: `data:${block.mediaType};base64,${block.data}`,
+                detail: "auto",
+              },
+            });
+          } else {
+            contentParts.push({ type: "text", text: `[Image: ${block.mediaType}]` });
+          }
         } else {
           // tool_result
           if (block.content.some((p) => p.type === "image")) {
-            // Multi-part tool result with images for vision-capable models.
-            const parts: OaiContentPart[] = [];
-            for (const part of block.content) {
-              if (part.type === "text") {
-                parts.push({ type: "text", text: block.is_error ? `Error: ${part.text}` : part.text });
-              } else if (part.type === "image") {
-                parts.push({
-                  type: "image_url",
-                  image_url: {
-                    url: `data:${part.mediaType};base64,${part.data}`,
-                    detail: "auto",
-                  },
-                });
+            if (supportsImages) {
+              // Multi-part tool result with images for vision-capable models.
+              const parts: OaiContentPart[] = [];
+              for (const part of block.content) {
+                if (part.type === "text") {
+                  parts.push({ type: "text", text: block.is_error ? `Error: ${part.text}` : part.text });
+                } else if (part.type === "image") {
+                  parts.push({
+                    type: "image_url",
+                    image_url: {
+                      url: `data:${part.mediaType};base64,${part.data}`,
+                      detail: "auto",
+                    },
+                  });
+                }
               }
+              toolResults.push({ tool_call_id: block.tool_use_id, content: parts });
+            } else {
+              // Non-vision model: replace images with placeholders so text
+              // parts still reach the model.
+              const text = block.content
+                .map((part) =>
+                  part.type === "text"
+                    ? (block.is_error ? `Error: ${part.text}` : part.text)
+                    : `[Image: ${part.mediaType}]`
+                )
+                .join("\n");
+              toolResults.push({ tool_call_id: block.tool_use_id, content: text });
             }
-            toolResults.push({ tool_call_id: block.tool_use_id, content: parts });
           } else {
             const text = block.content.filter((p) => p.type === "text").map((p) => p.text).join("\n");
             toolResults.push({
@@ -303,9 +324,14 @@ export class FireworksProvider implements Provider {
       );
     }
 
+    // supportsImages is a provider-native formatting hint, not an API parameter.
+    const providerOptions = params.providerOptions ?? {};
+    const { supportsImages: supportsImagesOption, ...restProviderOptions } = providerOptions;
+    const supportsImages = (supportsImagesOption as boolean | undefined) ?? true;
+
     const body = {
       model: fireworksModel,
-      messages: toOaiMessages(params.system, params.messages),
+      messages: toOaiMessages(params.system, params.messages, supportsImages),
       tools: toOaiTools(params.tools),
       max_tokens: params.maxTokens,
       stream: true,
@@ -317,7 +343,7 @@ export class FireworksProvider implements Provider {
       top_k: 40,
       presence_penalty: 0,
       frequency_penalty: 0,
-      ...params.providerOptions,
+      ...restProviderOptions,
     };
 
     const response = await fetchWithRetry(
