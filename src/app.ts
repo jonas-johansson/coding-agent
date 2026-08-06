@@ -1544,7 +1544,11 @@ async function parseUserInput(raw: string): Promise<ParsedUserInput> {
     displayText = `[Image: ${img.label}] ${displayText}`;
   }
 
-  const cleanedModelText = modelText.replace(/\s+/g, " ").trim();
+  const cleanedModelText = modelText
+    .replace(/[ \t]+/g, " ")      // collapse runs of spaces/tabs
+    .replace(/ *\n */g, "\n")     // trim spaces around newlines
+    .replace(/\n{3,}/g, "\n\n")   // cap consecutive blank lines at 2
+    .trim();
   if (cleanedModelText) {
     contentBlocks.push({ type: "text" as const, text: cleanedModelText });
   }
