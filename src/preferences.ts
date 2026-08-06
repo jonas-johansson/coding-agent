@@ -8,6 +8,8 @@
  *   - the selected variant per model
  *   - the current active model selection (used on a fresh launch; resuming a
  *     session instead restores that session's last-used model)
+ *   - MCP server enable/disable overrides (the mcp.json file itself is
+ *     user-authored and never modified)
  *
  * Loading is tolerant: malformed JSON or entries that reference models or
  * variants no longer present in the catalog are dropped rather than throwing,
@@ -29,6 +31,11 @@ export type UserPreferences = {
   variantByModel?: Record<string, string>;
   /** Current active model selection (formatModelSelection string). */
   currentModel?: string;
+  /**
+   * MCP server enable/disable overrides, keyed by server name. This is
+   * Pace-owned runtime state; the user-authored mcp.json is never modified.
+   */
+  mcpEnabled?: Record<string, boolean>;
 };
 
 // ── Schema ───────────────────────────────────────────────────────────────────
@@ -37,6 +44,7 @@ const userPreferencesSchema = z.object({
   cycleModels: z.array(z.string()).optional(),
   variantByModel: z.record(z.string(), z.string()).optional(),
   currentModel: z.string().optional(),
+  mcpEnabled: z.record(z.string(), z.boolean()).optional(),
 });
 
 // ── Paths ────────────────────────────────────────────────────────────────────

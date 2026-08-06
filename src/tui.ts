@@ -59,6 +59,23 @@ export type ModelOverlayOptions = {
   onCycleChange: (ids: string[]) => void;
 };
 
+/** A single MCP server row displayed in the MCP picker overlay. */
+export type McpOverlayItem = {
+  name: string;
+  enabled: boolean;
+  connected: boolean;
+  toolCount: number;
+  type: "local" | "remote";
+};
+
+/** Callbacks and data wiring for the MCP picker overlay. */
+export type McpOverlayOptions = {
+  /** Snapshot of the configured MCP servers to display. */
+  list: () => McpOverlayItem[] | Promise<McpOverlayItem[]>;
+  /** Called when the user toggles a server's enabled state via space. */
+  onToggle: (name: string, enabled: boolean) => void | Promise<void>;
+};
+
 /** A single session row displayed in the session picker overlay. */
 export type SessionOverlayItem = {
   id: string;
@@ -99,6 +116,7 @@ export type TreeOverlayOptions = {
 };
 
 type ModelOverlayEntry = { item: ModelOverlayItem; positions: number[] };
+type McpOverlayEntry = { item: McpOverlayItem; positions: number[] };
 type SegmentStyle =
   | "normal"
   | "bold"
@@ -288,6 +306,14 @@ export class Tui {
   private modelOverlayItems: ModelOverlayItem[] = [];
   private modelOverlaySelected = new Set<string>();
 
+  // ── MCP picker overlay state ──
+  private mcpOverlayActive = false;
+  private mcpOverlayQuery = "";
+  private mcpOverlayIndex = 0;
+  private mcpOverlayScroll = 0;
+  private mcpOverlayItems: McpOverlayItem[] = [];
+  private mcpOverlayBusy = false;
+
   // ── Session picker overlay state ──
   private sessionOverlayActive = false;
   private sessionOverlayIndex = 0;
@@ -301,7 +327,7 @@ export class Tui {
   private treeOverlayItems: TreeOverlayItem[] = [];
   private treeOverlayExpanded = new Set<string>();
 
-  constructor(private readonly options: { onSubmit?: SubmitHandler; onTab?: () => void; onShiftTab?: () => void; onCycleVariant?: () => void; onEscape?: () => void; onExit?: () => void | Promise<void>; onPasteImage?: () => void | Promise<void>; slashCommands?: SuggestionProvider; fileSuggestions?: FileSuggestionProvider; modelOverlay?: ModelOverlayOptions; sessionOverlay?: SessionOverlayOptions; treeOverlay?: TreeOverlayOptions; model?: string; cwd?: string; gitBranch?: string } = {}) {
+  constructor(private readonly options: { onSubmit?: SubmitHandler; onTab?: () => void; onShiftTab?: () => void; onCycleVariant?: () => void; onEscape?: () => void; onExit?: () => void | Promise<void>; onPasteImage?: () => void | Promise<void>; slashCommands?: SuggestionProvider; fileSuggestions?: FileSuggestionProvider; modelOverlay?: ModelOverlayOptions; mcpOverlay?: McpOverlayOptions; sessionOverlay?: SessionOverlayOptions; treeOverlay?: TreeOverlayOptions; model?: string; cwd?: string; gitBranch?: string } = {}) {
     this.model = options.model ?? "";
     this.cwd = options.cwd ?? "";
     this.gitBranch = options.gitBranch ?? "";
@@ -677,6 +703,11 @@ export class Tui {
       return;
     }
 
+    if (this.mcpOverlayActive) {
+      this.handleMcpOverlayKey(data);
+      return;
+    }
+
     if (this.sessionOverlayActive) {
       this.handleSessionOverlayKey(data);
       return;
@@ -793,6 +824,17 @@ export class Tui {
           this.requestRender();
         } else {
           this.openModelOverlay();
+        }
+        continue;
+      }
+
+      // Ctrl+E — open the MCP server picker overlay (Ctrl+M is Enter, so E)
+      if (char === "\u0005") {
+        if (this.running) {
+          this.status = "agent is still running";
+          this.requestRender();
+        } else {
+          void this.openMcpOverlay();
         }
         continue;
       }
@@ -1626,6 +1668,153 @@ export class Tui {
     this.closeModelOverlay();
   }
 
+  // ── MCP picker overlay ─────────────────────────────────────────────────────
+
+  async openMcpOverlay() {
+    if (!this.options.mcpOverlay) {
+      return;
+    }
+    const items = await this.options.mcpOverlay.list();
+    this.mcpOverlayActive = true;
+    this.mcpOverlayQuery = "";
+    this.mcpOverlayItems = items;
+    this.mcpOverlayIndex = 0;
+    this.mcpOverlayScroll = 0;
+    this.mcpOverlayAdjustScroll();
+    this.requestRender();
+  }
+
+  private closeMcpOverlay() {
+    this.mcpOverlayActive = false;
+    this.mcpOverlayBusy = false;
+    // Force a full repaint so the picker is fully cleared.
+    this.previousFrameRows = -1;
+    this.requestRender();
+  }
+
+  private handleMcpOverlayKey(data: string) {
+    switch (data) {
+      case "\u0003": // Ctrl+C
+      case "\x1b": // Esc
+        this.closeMcpOverlay();
+        return;
+      case "\r": // Enter — close (state persists per-toggle)
+        this.closeMcpOverlay();
+        return;
+      case " ": // Space — toggle enabled state
+        if (!this.mcpOverlayBusy) {
+          void this.toggleMcpOverlay();
+        }
+        return;
+      case "\x1b[A": // Up
+      case "\u0010": // Ctrl+P
+      case "\x1bk": // Alt+K (vim-style up)
+        this.moveMcpOverlay(-1);
+        return;
+      case "\x1b[B": // Down
+      case "\u000e": // Ctrl+N
+      case "\x1bj": // Alt+J (vim-style down)
+        this.moveMcpOverlay(1);
+        return;
+      case "\x1b[5~": // Page Up
+        this.moveMcpOverlay(-this.mcpOverlayListRows());
+        return;
+      case "\x1b[6~": // Page Down
+        this.moveMcpOverlay(this.mcpOverlayListRows());
+        return;
+      case "\u007f": // Backspace
+      case "\b":
+        if (this.mcpOverlayQuery.length > 0) {
+          this.mcpOverlayQuery = Array.from(this.mcpOverlayQuery).slice(0, -1).join("");
+          this.mcpOverlayIndex = 0;
+          this.mcpOverlayScroll = 0;
+          this.requestRender();
+        }
+        return;
+    }
+
+    if (data.startsWith("\x1b")) {
+      return;
+    }
+
+    // Append any printable characters to the fuzzy query. Spaces are handled
+    // above as a toggle (server names never contain spaces).
+    let added = "";
+    for (const char of data) {
+      if (char >= " " && char !== "\u007f" && char !== " ") {
+        added += char;
+      }
+    }
+    if (added.length > 0) {
+      this.mcpOverlayQuery += added;
+      this.mcpOverlayIndex = 0;
+      this.mcpOverlayScroll = 0;
+      this.requestRender();
+    }
+  }
+
+  private mcpOverlayFiltered(): McpOverlayEntry[] {
+    const query = this.mcpOverlayQuery.trim();
+    if (query.length === 0) {
+      return this.mcpOverlayItems.map((item) => ({ item, positions: [] }));
+    }
+    const scored: Array<McpOverlayEntry & { score: number; index: number }> = [];
+    this.mcpOverlayItems.forEach((item, index) => {
+      const match = fuzzyMatch(query, item.name);
+      if (match) {
+        scored.push({ item, positions: match.positions, score: match.score, index });
+      }
+    });
+    scored.sort((a, b) => b.score - a.score || a.index - b.index);
+    return scored.map(({ item, positions }) => ({ item, positions }));
+  }
+
+  private mcpOverlayListRows(): number {
+    const rows = Math.max(process.stdout.rows ?? 24, 1);
+    return Math.max(1, rows - OVERLAY_HEADER_ROWS - OVERLAY_FOOTER_ROWS);
+  }
+
+  private mcpOverlayAdjustScroll() {
+    const visible = this.mcpOverlayListRows();
+    if (this.mcpOverlayIndex < this.mcpOverlayScroll) {
+      this.mcpOverlayScroll = this.mcpOverlayIndex;
+    } else if (this.mcpOverlayIndex >= this.mcpOverlayScroll + visible) {
+      this.mcpOverlayScroll = this.mcpOverlayIndex - visible + 1;
+    }
+    if (this.mcpOverlayScroll < 0) {
+      this.mcpOverlayScroll = 0;
+    }
+  }
+
+  private moveMcpOverlay(delta: number) {
+    const items = this.mcpOverlayFiltered();
+    if (items.length === 0) {
+      return;
+    }
+    this.mcpOverlayIndex = Math.max(0, Math.min(items.length - 1, this.mcpOverlayIndex + delta));
+    this.mcpOverlayAdjustScroll();
+    this.requestRender();
+  }
+
+  private async toggleMcpOverlay() {
+    const entry = this.mcpOverlayFiltered()[this.mcpOverlayIndex];
+    if (!entry) {
+      return;
+    }
+    this.mcpOverlayBusy = true;
+    try {
+      await this.options.mcpOverlay?.onToggle(entry.item.name, !entry.item.enabled);
+    } finally {
+      this.mcpOverlayBusy = false;
+    }
+    // Re-list so the checkbox reflects the (possibly rolled-back) state.
+    this.mcpOverlayItems = (await this.options.mcpOverlay?.list()) ?? [];
+    if (this.mcpOverlayIndex >= this.mcpOverlayItems.length) {
+      this.mcpOverlayIndex = Math.max(0, this.mcpOverlayItems.length - 1);
+    }
+    this.requestRender();
+  }
+
   // ── Session picker overlay ─────────────────────────────────────────────────
 
   openSessionOverlay(items: SessionOverlayItem[]) {
@@ -2342,6 +2531,14 @@ export class Tui {
       return;
     }
 
+    if (this.mcpOverlayActive) {
+      const overlayLines = this.renderMcpOverlay(columns, rows);
+      // Cursor sits at the end of the search query on the second row.
+      const cursorCol = visibleLength("  Search: ") + Array.from(this.mcpOverlayQuery).length + 1;
+      this.flushFrame(overlayLines, rows, columns, 2, cursorCol);
+      return;
+    }
+
     if (this.sessionOverlayActive) {
       const overlayLines = this.renderSessionOverlay(columns, rows);
       this.flushFrame(overlayLines, rows, columns, Math.min(rows, this.sessionOverlayIndex - this.sessionOverlayScroll + OVERLAY_HEADER_ROWS + 1), 1);
@@ -2843,6 +3040,92 @@ export class Tui {
     line += `${fg(isCurrent ? 41 : baseFg)}  ${marker} `;
     line += `${fg(isSelected ? currentTheme.glyphs.done.color : 244)}${checkbox} `;
     line += highlightModelId(item.id, positions, baseFg, currentTheme.logoColor);
+    line += `${fg(currentTheme.overlay.fg)}${" ".repeat(gap)}${meta}${" ".repeat(trailing)}`;
+    line += RESET;
+    return line;
+  }
+
+  private renderMcpOverlay(columns: number, rows: number): string[] {
+    const items = this.mcpOverlayFiltered();
+
+    // Clamp the highlight and scroll window to the current (possibly filtered) list.
+    if (this.mcpOverlayIndex >= items.length) {
+      this.mcpOverlayIndex = Math.max(0, items.length - 1);
+    }
+    const listRows = Math.max(1, rows - OVERLAY_HEADER_ROWS - OVERLAY_FOOTER_ROWS);
+    if (this.mcpOverlayScroll > Math.max(0, items.length - listRows)) {
+      this.mcpOverlayScroll = Math.max(0, items.length - listRows);
+    }
+    this.mcpOverlayAdjustScroll();
+
+    const lines: string[] = [];
+
+    // Title bar.
+    const enabledCount = this.mcpOverlayItems.filter((item) => item.enabled).length;
+    const title = `  Select MCP servers  ·  ${enabledCount} enabled  ·  ${items.length}/${this.mcpOverlayItems.length} shown`;
+    lines.push(overlayChromeLine(`${BOLD}${fg(currentTheme.overlay.brightFg)}${title}`, columns));
+
+    // Search line.
+    lines.push(overlayLine(`${fg(currentTheme.overlay.fg)}  Search: ${fg(currentTheme.overlay.brightFg)}${this.mcpOverlayQuery}`, columns));
+
+    // Separator.
+    lines.push(`${bg(currentTheme.overlay.bg)}${fg(240)}${"─".repeat(columns)}${RESET}`);
+
+    // List window.
+    if (items.length === 0) {
+      const message = this.mcpOverlayItems.length === 0
+        ? "No MCP servers configured. Add servers to ~/.config/pace/mcp.json"
+        : `No MCP servers match "${this.mcpOverlayQuery}"`;
+      lines.push(overlayLine(`${fg(currentTheme.overlay.dimFg)}  ${message}`, columns));
+      for (let i = 1; i < listRows; i++) {
+        lines.push(overlayLine("", columns));
+      }
+    } else {
+      const start = this.mcpOverlayScroll;
+      const end = Math.min(items.length, start + listRows);
+      for (let i = start; i < end; i++) {
+        lines.push(this.renderMcpOverlayRow(items[i], i === this.mcpOverlayIndex, columns));
+      }
+      for (let i = end - start; i < listRows; i++) {
+        lines.push(overlayLine("", columns));
+      }
+    }
+
+    // Footer hint.
+    const hint = "  ↑/↓ move   space toggle   esc close";
+    lines.push(overlayChromeLine(`${fg(currentTheme.overlay.fg)}${hint}`, columns));
+
+    // Guarantee exactly `rows` lines.
+    while (lines.length < rows) {
+      lines.push(overlayLine("", columns));
+    }
+    lines.length = rows;
+    return lines;
+  }
+
+  private renderMcpOverlayRow(entry: McpOverlayEntry, isCursor: boolean, columns: number): string {
+    const { item, positions } = entry;
+    const rowBg = isCursor ? currentTheme.overlay.selBg : currentTheme.overlay.bg;
+    const isSelected = item.enabled;
+
+    const marker = item.connected ? "●" : " ";
+    const checkbox = isSelected ? "[x]" : "[ ]";
+    const baseFg = isCursor ? 255 : 250;
+
+    const kind = item.type === "local" ? "local" : "remote";
+    const tools = item.connected ? `${item.toolCount} tool${item.toolCount === 1 ? "" : "s"}` : "off";
+    const meta = `${kind}  ${tools}`;
+
+    // Visible width of the left portion: "  " + marker + " " + checkbox + " " + name.
+    const leftWidth = 2 + 1 + 1 + checkbox.length + 1 + item.name.length;
+    const metaWidth = meta.length;
+    const gap = Math.max(1, columns - leftWidth - metaWidth - 1);
+    const trailing = Math.max(0, columns - leftWidth - gap - metaWidth);
+
+    let line = `${bg(rowBg)}`;
+    line += `${fg(item.connected ? 41 : baseFg)}  ${marker} `;
+    line += `${fg(isSelected ? currentTheme.glyphs.done.color : 244)}${checkbox} `;
+    line += highlightModelId(item.name, positions, baseFg, currentTheme.logoColor);
     line += `${fg(currentTheme.overlay.fg)}${" ".repeat(gap)}${meta}${" ".repeat(trailing)}`;
     line += RESET;
     return line;

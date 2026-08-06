@@ -6,10 +6,10 @@
  */
 
 import { z } from "zod";
-import { loadMcpConfig, getEnabledServers, type McpServerConfig } from "./mcp-config";
+import { loadMcpConfig, getEnabledServers, type McpConfig, type McpServerConfig } from "./mcp-config";
 import { McpStdioTransport, McpHttpTransport } from "./mcp-transport";
 import { McpClient, type McpTool } from "./mcp-client";
-import { registerTool, tools as toolRegistry, type ToolDescriptor, type ToolOutput } from "./tool";
+import { registerTool, unregisterTool, tools as toolRegistry, type ToolDescriptor, type ToolOutput } from "./tool";
 
 // ── State ────────────────────────────────────────────────────────────────────
 
@@ -31,33 +31,122 @@ export type InitMcpResult = {
   errors: McpConnectionError[];
 };
 
-export async function initMcpServers(signal?: AbortSignal): Promise<InitMcpResult> {
+export async function initMcpServers(
+  enabledOverrides?: Record<string, boolean>,
+  signal?: AbortSignal,
+): Promise<InitMcpResult> {
   const config = await loadMcpConfig();
-  const enabled = getEnabledServers(config);
-
-  if (enabled.length === 0) {
-    return { connected: [], errors: [] };
-  }
+  const enabled = getEnabledServers(config, enabledOverrides);
 
   const connected: ConnectedMcpServer[] = [];
   const errors: McpConnectionError[] = [];
 
-  for (const { name, config: serverConfig } of enabled) {
-    try {
-      const client = createClient(name, serverConfig);
-      await client.initialize(signal);
-      const toolList = await client.listTools(signal);
-      const registeredNames = registerMcpTools(name, client, toolList);
-
-      connected.push({ name, client, tools: toolList, registeredToolNames: registeredNames });
-      connectedServers.push(connected[connected.length - 1]);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      errors.push({ name, error: message });
+  for (const { name } of enabled) {
+    const error = await connectMcpServer(name, signal);
+    if (error) {
+      errors.push(error);
+    } else {
+      const server = connectedServers.find((s) => s.name === name);
+      if (server) {
+        connected.push(server);
+      }
     }
   }
 
   return { connected, errors };
+}
+
+/**
+ * Connect a single MCP server: initialize the client, discover its tools, and
+ * register them under prefixed names. Idempotent — returns null if the server
+ * is already connected, or an error object on failure.
+ */
+export async function connectMcpServer(name: string, signal?: AbortSignal): Promise<McpConnectionError | null> {
+  if (connectedServers.some((s) => s.name === name)) {
+    return null;
+  }
+
+  let config: McpConfig;
+  try {
+    config = await loadMcpConfig();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { name, error: `Failed to load MCP config: ${message}` };
+  }
+  const serverConfig = config[name];
+  if (!serverConfig) {
+    return { name, error: `No MCP server named "${name}" in config` };
+  }
+
+  try {
+    const client = createClient(name, serverConfig);
+    await client.initialize(signal);
+    const toolList = await client.listTools(signal);
+    const registeredNames = registerMcpTools(name, client, toolList);
+
+    connectedServers.push({ name, client, tools: toolList, registeredToolNames: registeredNames });
+    return null;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { name, error: message };
+  }
+}
+
+/**
+ * Disconnect a single MCP server: unregister its tools and close the client.
+ * Idempotent — a no-op when the server is not connected.
+ */
+export async function disconnectMcpServer(name: string): Promise<void> {
+  const index = connectedServers.findIndex((s) => s.name === name);
+  if (index === -1) {
+    return;
+  }
+
+  const [server] = connectedServers.splice(index, 1);
+  for (const toolName of server.registeredToolNames) {
+    unregisterTool(toolName);
+  }
+
+  try {
+    await server.client.close();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[MCP] Error closing server "${name}": ${message}`);
+  }
+}
+
+export type McpServerListing = {
+  name: string;
+  type: "local" | "remote";
+  enabled: boolean;
+  connected: boolean;
+  toolCount: number;
+};
+
+/**
+ * List all configured MCP servers with their effective enabled state and
+ * current connection status, for the picker overlay. Returns an empty list
+ * when the config file is missing or malformed.
+ */
+export async function listMcpServers(enabledOverrides?: Record<string, boolean>): Promise<McpServerListing[]> {
+  let config: McpConfig;
+  try {
+    config = await loadMcpConfig();
+  } catch {
+    return [];
+  }
+
+  const connectedByName = new Map(connectedServers.map((s) => [s.name, s]));
+  return Object.entries(config).map(([name, serverConfig]) => {
+    const connected = connectedByName.get(name);
+    return {
+      name,
+      type: serverConfig.type,
+      enabled: enabledOverrides?.[name] ?? serverConfig.enabled !== false,
+      connected: connected !== undefined,
+      toolCount: connected?.tools.length ?? 0,
+    };
+  });
 }
 
 function createClient(name: string, config: McpServerConfig): McpClient {

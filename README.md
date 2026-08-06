@@ -104,6 +104,7 @@ Model catalog environment variables:
 | `/skills` | List available skills |
 | `/skill:<name>` | Run a skill |
 | `/mcp` | List connected MCP servers and tools |
+| `/mcps` | Enable or disable MCP servers (Ctrl+E) |
 
 ## File and image references
 
@@ -169,6 +170,8 @@ Configure external tool servers in `~/.config/pace/mcp.json`:
 ```
 
 MCP tools show up as `mcp__<server>__<tool>` and the agent uses them automatically when relevant.
+
+`mcp.json` is a stable, manually-authored config file — Pace never writes to it. To enable or disable servers at runtime, press **Ctrl+E** or run `/mcps` to open a picker with checkboxes (like the model picker): space toggles a server, and the change takes effect immediately (the server connects or disconnects and its tools appear or disappear). The enabled/disabled state is saved to `~/.config/pace/prefs.json` and wins over the `enabled` field in `mcp.json`.
 
 ## Development
 

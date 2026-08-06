@@ -66,6 +66,16 @@ export function registerTool<T extends ZodObjectSchema>(definition: ToolDescript
   return definition;
 }
 
+/** Remove a previously registered tool by name. Returns false if not found. */
+export function unregisterTool(name: string): boolean {
+  const index = tools.findIndex((tool) => tool.name === name);
+  if (index === -1) {
+    return false;
+  }
+  tools.splice(index, 1);
+  return true;
+}
+
 export function defineTool<T extends ZodObjectSchema>(definition: ToolDescriptor<T>) {
   return definition;
 }

@@ -53,10 +53,20 @@ export async function loadMcpConfig(): Promise<McpConfig> {
   }
 }
 
-export function getEnabledServers(config: McpConfig): Array<{ name: string; config: McpServerConfig }> {
+/**
+ * Return the servers that should be connected.
+ *
+ * `enabledOverrides` carries Pace-owned runtime state (from prefs.json) and
+ * wins over the user-authored `enabled` field in mcp.json when present.
+ */
+export function getEnabledServers(
+  config: McpConfig,
+  enabledOverrides?: Record<string, boolean>,
+): Array<{ name: string; config: McpServerConfig }> {
   const entries: Array<{ name: string; config: McpServerConfig }> = [];
   for (const [name, serverConfig] of Object.entries(config)) {
-    if (serverConfig.enabled !== false) {
+    const enabled = enabledOverrides?.[name] ?? serverConfig.enabled !== false;
+    if (enabled) {
       entries.push({ name, config: serverConfig });
     }
   }

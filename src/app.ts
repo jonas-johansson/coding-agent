@@ -82,6 +82,9 @@ import { loadCachedModelCatalog, refreshModelCatalog } from "./model-catalog";
 import {
   initMcpServers,
   shutdownMcpServers,
+  connectMcpServer,
+  disconnectMcpServer,
+  listMcpServers,
   formatMcpListing,
   getConnectedMcpServers,
 } from "./mcp-tools";
@@ -273,6 +276,13 @@ let sessionTitleModelSelection: ModelSelection = {
 };
 let activeSession = createSession(process.cwd(), currentModelId);
 
+/**
+ * MCP server enable/disable overrides (Pace-owned runtime state). The
+ * user-authored mcp.json is never modified; these win over its `enabled`
+ * field and are persisted to prefs.json.
+ */
+let mcpEnabledOverrides: Record<string, boolean> = {};
+
 type ResolvedModelVariant = ModelVariant & { id: string };
 
 function currentModelConfig(): ModelConfig {
@@ -361,6 +371,7 @@ const tui = new Tui({
     { label: "/skills", detail: "List available skills", kind: "command", insertText: "/skills " },
     { label: "/skill:<name>", detail: "Load and run a skill", kind: "command", insertText: "/skill:" },
     { label: "/mcp", detail: "List connected MCP servers and tools", kind: "command", insertText: "/mcp" },
+    { label: "/mcps", detail: "Enable or disable MCP servers (Ctrl+E)", kind: "command", insertText: "/mcps", executeOnAccept: true },
     { label: "/theme", detail: "Show or switch theme", kind: "command", insertText: "/theme " },
     { label: "/themes", detail: "List available themes", kind: "command", insertText: "/themes", executeOnAccept: true },
   ],
@@ -381,6 +392,25 @@ const tui = new Tui({
     onCycleChange: (ids) => {
       cycleModelSelections = (ids.length > 0 ? ids : getAvailableModelIds()).map((modelId) => ({ modelId }));
       schedulePreferenceSave();
+    },
+  },
+  mcpOverlay: {
+    list: () => listMcpServers(mcpEnabledOverrides),
+    onToggle: async (name, enabled) => {
+      mcpEnabledOverrides[name] = enabled;
+      schedulePreferenceSave();
+      if (enabled) {
+        const error = await connectMcpServer(name);
+        if (error) {
+          delete mcpEnabledOverrides[name];
+          schedulePreferenceSave();
+          tui.setStatus(`MCP: ${name} — ${error.error}`);
+          return;
+        }
+      } else {
+        await disconnectMcpServer(name);
+      }
+      tui.setStatus(`MCP: ${name} ${enabled ? "enabled" : "disabled"}`);
     },
   },
   sessionOverlay: {
@@ -888,6 +918,7 @@ function buildPreferences() {
   return {
     cycleModels: cycleModelSelections.map(formatModelSelection),
     ...(Object.keys(variantByModel).length > 0 && { variantByModel }),
+    ...(Object.keys(mcpEnabledOverrides).length > 0 && { mcpEnabled: mcpEnabledOverrides }),
     currentModel: formatCurrentModelSelection(),
   };
 }
@@ -924,7 +955,12 @@ function applyStoredPreferences(preferences: {
   cycleModels?: string[];
   variantByModel?: Record<string, string>;
   currentModel?: string;
+  mcpEnabled?: Record<string, boolean>;
 }) {
+  if (preferences.mcpEnabled) {
+    mcpEnabledOverrides = { ...preferences.mcpEnabled };
+  }
+
   if (preferences.cycleModels) {
     const restored = preferences.cycleModels
       .map((entry) => parseModelSelection(entry))
@@ -1123,6 +1159,10 @@ async function handleCommand(command: string): Promise<boolean> {
     }
     case "/models": {
       tui.openModelOverlay();
+      return true;
+    }
+    case "/mcps": {
+      void tui.openMcpOverlay();
       return true;
     }
     case "/variants":
@@ -2223,7 +2263,7 @@ async function main() {
 
   // Initialize MCP servers
   try {
-    const { connected, errors } = await initMcpServers();
+    const { connected, errors } = await initMcpServers(mcpEnabledOverrides);
     if (connected.length > 0) {
       const serverNames = connected.map((s) => s.name).join(", ");
       const totalTools = connected.reduce((sum, s) => sum + s.tools.length, 0);
