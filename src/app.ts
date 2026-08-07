@@ -777,7 +777,17 @@ function sendDoneNotification(session: Session): void {
 }
 
 function formatError(error: unknown) {
-  return error instanceof Error ? error.stack ?? error.message : String(error);
+  if (!(error instanceof Error)) return String(error);
+  let text = error.stack ?? error.message;
+  // Surface wrapped root causes — e.g. the OpenAI SDK wraps stream errors in
+  // a fresh OpenAIError whose stack points at its own wrapping code, hiding
+  // the original error (and its stack) on the `cause` property.
+  let cause: unknown = error.cause;
+  while (cause instanceof Error) {
+    text += `\nCaused by: ${cause.stack ?? cause.message}`;
+    cause = cause.cause;
+  }
+  return text;
 }
 
 function formatErrorMessage(error: unknown) {

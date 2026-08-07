@@ -9,7 +9,7 @@
  * server-side item persistence.
  */
 
-import OpenAI from "openai";
+import OpenAI, { APIUserAbortError } from "openai";
 import type {
   Provider,
   ProviderStream,
@@ -51,7 +51,8 @@ function isOpenAIMetadata(v: unknown): v is OpenAIMetadata {
 }
 
 function textFromOutputMessage(item: Extract<ResponseOutputItem, { type: "message" }>): string {
-  return item.content
+  // Some OpenAI-compatible endpoints (e.g. OpenCode Zen) emit `content: null`.
+  return (item.content ?? [])
     .map((part) => {
       if (part.type === "output_text") return part.text;
       if (part.type === "refusal") return part.refusal;
@@ -66,7 +67,7 @@ function textFromReasoningItem(item: Extract<ResponseOutputItem, { type: "reason
     return reasoningText;
   }
 
-  return item.summary.map((part) => part.text).filter(Boolean).join("\n");
+  return (item.summary ?? []).map((part) => part.text).filter(Boolean).join("\n");
 }
 
 function stripReplayReadonlyFields(item: ResponseOutputItem): ResponseInputItem {
@@ -294,7 +295,7 @@ function contentFromOutputItems(outputItems: ResponseOutputItem[]): ContentBlock
 
   for (const item of outputItems) {
     if (item.type === "message") {
-      const text = item.content
+      const text = (item.content ?? [])
         .map((part) => {
           if (part.type === "output_text") return part.text;
           if (part.type === "refusal") return part.refusal;
@@ -341,22 +342,42 @@ export class OpenAIProvider implements Provider {
   }): Promise<ProviderStream> {
     const reasoning = openAIReasoningOption(params.providerOptions);
     const include = openAIIncludeOption(params.providerOptions);
-    const responseStream = this.client.responses.stream(
-      {
-        model: params.model,
-        instructions: params.system,
-        input: toResponsesInput(params.messages),
-        tools: toResponsesTools(params.tools),
-        max_output_tokens: params.maxTokens,
-        parallel_tool_calls: true,
-        store: false,
-        ...(reasoning && { reasoning }),
-        ...(include && { include }),
-      },
-      { signal: params.signal },
-    );
 
-    return new OpenAIStream(responseStream);
+    let eventStream: AsyncIterable<ResponseStreamEvent>;
+    try {
+      // Stream raw events via responses.create() instead of the
+      // responses.stream() helper. The helper's ResponseStream accumulator
+      // indexes response.output[...] and message content[...] without null
+      // guards and crashes ("Cannot read properties of null (reading '0')")
+      // when an OpenAI-compatible endpoint (e.g. OpenCode Zen) emits
+      // `output: null` in response.created or `content: null` on a message
+      // output item. OpenAIStream does its own event accumulation and never
+      // uses the helper's snapshot/finalResponse features.
+      eventStream = await this.client.responses.create(
+        {
+          model: params.model,
+          instructions: params.system,
+          input: toResponsesInput(params.messages),
+          tools: toResponsesTools(params.tools),
+          max_output_tokens: params.maxTokens,
+          parallel_tool_calls: true,
+          store: false,
+          stream: true,
+          ...(reasoning && { reasoning }),
+          ...(include && { include }),
+        },
+        { signal: params.signal },
+      );
+    } catch (error) {
+      // The SDK converts fetch aborts into APIUserAbortError; translate back
+      // to a DOMException AbortError so isAbortError() recognizes the cancel.
+      if (error instanceof APIUserAbortError || params.signal?.aborted) {
+        throw new DOMException("Aborted", "AbortError");
+      }
+      throw error;
+    }
+
+    return new OpenAIStream(eventStream, params.signal);
   }
 }
 
@@ -373,7 +394,8 @@ type PendingToolCall = {
 };
 
 class OpenAIStream implements ProviderStream {
-  private inner: ReturnType<OpenAI["responses"]["stream"]>;
+  private inner: AsyncIterable<ResponseStreamEvent>;
+  private signal?: AbortSignal;
 
   // Accumulated state built up during iteration, consumed by finalMessage().
   private fullTextContent = "";
@@ -391,8 +413,9 @@ class OpenAIStream implements ProviderStream {
   private hasToolCalls = false;
   private iterationDone = false;
 
-  constructor(inner: ReturnType<OpenAI["responses"]["stream"]>) {
+  constructor(inner: AsyncIterable<ResponseStreamEvent>, signal?: AbortSignal) {
     this.inner = inner;
+    this.signal = signal;
   }
 
   async *[Symbol.asyncIterator](): AsyncIterator<StreamEvent> {
@@ -401,7 +424,7 @@ class OpenAIStream implements ProviderStream {
     // Track any open assistant text/reasoning block so transitions are explicit.
     let openBlock: "text" | "reasoning" | undefined;
 
-    for await (const event of this.inner as AsyncIterable<ResponseStreamEvent>) {
+    for await (const event of this.inner) {
       switch (event.type) {
         // ── Reasoning output ──
         // GPT-5.5 streams reasoning separately from final answer text. Surface both
@@ -549,7 +572,7 @@ class OpenAIStream implements ProviderStream {
         // ── Response completed — extract usage ──
         case "response.completed": {
           const resp = event.response;
-          if (resp.usage) {
+          if (resp?.usage) {
             this.usage = {
               inputTokens: resp.usage.input_tokens,
               outputTokens: resp.usage.output_tokens,
@@ -563,6 +586,13 @@ class OpenAIStream implements ProviderStream {
         default:
           break;
       }
+    }
+
+    // The SDK's raw stream swallows fetch aborts and simply ends the
+    // iteration. Surface cancellation as a DOMException AbortError so the
+    // caller takes its cancel path instead of completing an empty turn.
+    if (this.signal?.aborted) {
+      throw new DOMException("Aborted", "AbortError");
     }
 
     // Close any still-open text/reasoning block.
