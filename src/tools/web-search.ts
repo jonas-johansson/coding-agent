@@ -22,7 +22,7 @@ function parseSsePayload(text: string): unknown {
 }
 
 export const webSearchTool = defineTool({
-  name: "web_search",
+  name: "websearch",
   concurrency: "safe",
   description:
     "Search the web for current information, news, facts, or any topic.",
@@ -38,7 +38,7 @@ export const webSearchTool = defineTool({
   }),
   truncateOutput: false,
   showContent: false,
-  titleFormatter: (input) => `web_search: ${input.query ?? ""}`,
+  titleFormatter: (input) => `websearch: ${input.query ?? ""}`,
   execute: async (input, signal): Promise<ToolOutput> => {
     throwIfAborted(signal);
     const { query, numResults } = input;
