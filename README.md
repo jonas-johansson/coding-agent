@@ -116,6 +116,13 @@ Model catalog environment variables:
 
 Pace reads global configuration from `~/.config/pace/config.json`.
 
+Pace also reads a global instructions file from `~/.config/pace/AGENTS.md` and merges it into the system prompt alongside the project `AGENTS.md` in the current working directory. Global instructions apply in every project; project-specific instructions take precedence. Create the file to set preferences that should always apply, such as:
+
+```
+Always talk in ASD-STE100 Simplified Technical English.
+Always talk to me like I have ADHD.
+```
+
 Choose the startup model and the models that **Tab** / **Shift+Tab** cycle through with full `provider/model` IDs. Omit `:variant` for the unset/default selection, or use `provider/model:variant` to select a provider-native variant explicitly:
 
 ```json

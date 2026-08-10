@@ -103,6 +103,20 @@ async function loadAgentsFile(): Promise<string | null> {
   }
 }
 
+/**
+ * Attempts to read the global AGENTS.md from ~/.config/pace/AGENTS.md.
+ * Returns the file contents as a string, or null if the file does not exist.
+ */
+async function loadGlobalAgentsFile(): Promise<string | null> {
+  try {
+    const filePath = join(homedir(), ".config", "pace", "AGENTS.md");
+    const contents = await readFile(filePath, "utf-8");
+    return contents;
+  } catch {
+    return null;
+  }
+}
+
 function formatCwd(cwd: string): string {
   const home = homedir();
   return cwd.startsWith(home) ? "~" + cwd.slice(home.length) : cwd;
@@ -1856,7 +1870,8 @@ async function prompt(
     }));
   };
 
-  const [agentsFileContents, skills] = await Promise.all([
+  const [globalAgentsFileContents, agentsFileContents, skills] = await Promise.all([
+    loadGlobalAgentsFile(),
     loadAgentsFile(),
     discoverSkills(),
   ]);
@@ -1882,6 +1897,10 @@ async function prompt(
     systemText +=
       `\n\n---\n\nAvailable MCP servers:\n${mcpLines.join("\n")}\n\n` +
       `MCP tools are named mcp__<server>__<tool>. Use them when they are relevant to the task.`;
+  }
+
+  if (globalAgentsFileContents) {
+    systemText += `\n\n---\n\n# Global instructions (from ~/.config/pace/AGENTS.md)\n\n${globalAgentsFileContents}`;
   }
 
   if (agentsFileContents) {
