@@ -3,6 +3,7 @@ import { unlink } from "fs/promises";
 import { spawn } from "child_process";
 import { z } from "zod";
 import { defineTool, isAbortError, throwIfAborted, type ToolOutput } from "./core";
+import { checkCommandSafety, isCommandGuardEnabled } from "./dangerous-command";
 import {
   TOOL_OUTPUT_TRUNCATION_BYTES,
   TOOL_OUTPUT_TRUNCATION_HEAD_BYTES,
@@ -45,6 +46,19 @@ export const bashTool = defineTool({
   },
   execute: async (input, signal, context): Promise<ToolOutput> => {
     throwIfAborted(signal);
+
+    if (isCommandGuardEnabled()) {
+      const safety = checkCommandSafety(input.command);
+      if (safety.verdict === "dangerous") {
+        const message = `Blocked by command guard: ${safety.reason}.`;
+        context?.onOutput?.(message);
+        return {
+          content: [{ type: "text", text: `Error: ${message}` }],
+          is_error: true,
+        };
+      }
+    }
+
     const timeoutMs = Math.min(
       (input.timeout ?? BASH_DEFAULT_TIMEOUT / 1000) * 1000,
       BASH_MAX_TIMEOUT,
