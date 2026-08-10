@@ -2294,6 +2294,11 @@ async function main() {
     tui.setStatus(`Rate limited on ${new URL(event.url).hostname}, retrying in ${seconds}s… (${event.attempt}/${event.maxRetries})`);
   });
 
+  onEvent("stream-retry", (event) => {
+    const seconds = (event.waitMs / 1000).toFixed(1);
+    tui.setStatus(`Response stream interrupted (${event.reason}), retrying in ${seconds}s… (${event.attempt}/${event.maxRetries})`);
+  });
+
   // Initialize MCP servers
   try {
     const { connected, errors } = await initMcpServers(mcpEnabledOverrides);

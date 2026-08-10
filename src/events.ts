@@ -12,17 +12,27 @@ export type EventMap = {
     maxRetries: number;
     waitMs: number;
   };
+  "stream-retry": {
+    attempt: number;
+    maxRetries: number;
+    waitMs: number;
+    reason: string;
+  };
 };
 
+// Stored loosely so different event payloads can share the map; the public
+// API (onEvent/emitEvent) keeps payloads fully typed.
+type AnyEventListener = (payload: any) => void;
+
 const listeners: {
-  [K in keyof EventMap]?: Set<(payload: EventMap[K]) => void>;
+  [K in keyof EventMap]?: Set<AnyEventListener>;
 } = {};
 
 export function onEvent<K extends keyof EventMap>(
   type: K,
   listener: (payload: EventMap[K]) => void,
 ): () => void {
-  const set = (listeners[type] ??= new Set()) as Set<(payload: EventMap[K]) => void>;
+  const set = (listeners[type] ??= new Set());
   set.add(listener);
   return () => set.delete(listener);
 }

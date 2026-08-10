@@ -3,7 +3,7 @@
  * Provider interface.
  */
 
-import Anthropic from "@anthropic-ai/sdk";
+import Anthropic, { type AnthropicError } from "@anthropic-ai/sdk";
 import type {
   Provider,
   ProviderStream,
@@ -14,8 +14,43 @@ import type {
   ToolDefinition,
   UsageInfo,
 } from "../provider";
+import { emitEvent } from "../events";
+import { delay } from "../fetch-retry";
 
 const MAX_REQUEST_BODY_BYTES = 10 * 1024 * 1024;
+
+const STREAM_MAX_RETRIES = 3;
+const STREAM_RETRY_BASE_DELAY_MS = 1000;
+const STREAM_RETRY_MAX_DELAY_MS = 8000;
+
+/**
+ * Errors where a fresh request can succeed: dropped connections, mid-stream
+ * SSE error events (e.g. overloaded_error, which carry no HTTP status), and
+ * rate-limit/server errors that outlasted the SDK's own connect-time retries.
+ * Client errors (400/401/403/404) and user aborts are not retried.
+ */
+function isRetryableStreamError(error: unknown): boolean {
+  if (error instanceof Anthropic.APIUserAbortError) return false;
+  if (error instanceof Anthropic.APIConnectionError) return true;
+  if (error instanceof Anthropic.APIError) {
+    if (error.status === undefined) return true; // mid-stream SSE error event
+    return error.status === 429 || error.status >= 500;
+  }
+  // Generic SDK errors, e.g. "request ended without sending any chunks".
+  if (error instanceof Anthropic.AnthropicError) return true;
+  return false;
+}
+
+function streamRetryReason(error: unknown): string {
+  if (error instanceof Anthropic.APIError) {
+    if (error.type) return String(error.type);
+    if (error.status) return `HTTP ${error.status}`;
+  }
+  if (error instanceof Error && error.message) {
+    return error.message.length > 80 ? `${error.message.slice(0, 80)}…` : error.message;
+  }
+  return "unknown error";
+}
 
 // ── Provider metadata ────────────────────────────────────────────────────────
 
@@ -207,12 +242,10 @@ export class AnthropicProvider implements Provider {
       );
     }
 
-    const anthropicStream = await this.client.messages.stream(
-      requestBody,
-      { signal: params.signal },
+    return new AnthropicStream(
+      () => this.client.messages.stream(requestBody, { signal: params.signal }),
+      params.signal,
     );
-
-    return new AnthropicStream(anthropicStream);
   }
 }
 
@@ -221,15 +254,88 @@ export class AnthropicProvider implements Provider {
 class AnthropicStream implements ProviderStream {
   private innerStream: ReturnType<Anthropic["messages"]["stream"]>;
   private currentBlock: { type: "text" | "thinking" | "tool_use"; toolUseId?: string } | undefined;
+  private readonly createStream: () => ReturnType<Anthropic["messages"]["stream"]>;
+  private readonly signal?: AbortSignal;
+  private sawMessageStop = false;
+  private streamError: unknown;
+  private iterationDone = false;
 
-  constructor(inner: ReturnType<Anthropic["messages"]["stream"]>) {
-    this.innerStream = inner;
+  constructor(
+    createStream: () => ReturnType<Anthropic["messages"]["stream"]>,
+    signal?: AbortSignal,
+  ) {
+    this.createStream = createStream;
+    this.signal = signal;
+    this.innerStream = this.track(createStream());
+  }
+
+  /**
+   * The SDK reports mid-stream failures via an 'error' event instead of
+   * throwing from its async iterator, and the event is missed when the
+   * consumer is not awaiting next() at that moment. Capture it so no failure
+   * is mistaken for a clean end of stream.
+   */
+  private track(stream: ReturnType<Anthropic["messages"]["stream"]>) {
+    stream.on("error", (error: AnthropicError) => {
+      this.streamError = error;
+    });
+    return stream;
   }
 
   async *[Symbol.asyncIterator](): AsyncIterator<StreamEvent> {
-    for await (const event of this.innerStream) {
-      const mapped = this.mapEvent(event);
-      if (mapped) yield mapped;
+    let attempt = 0;
+    while (true) {
+      this.currentBlock = undefined;
+      this.sawMessageStop = false;
+      this.streamError = undefined;
+
+      let failure: unknown;
+      try {
+        for await (const event of this.innerStream) {
+          const mapped = this.mapEvent(event);
+          if (mapped) yield mapped;
+        }
+      } catch (error) {
+        failure = error;
+      }
+
+      if (failure === undefined && this.sawMessageStop) {
+        this.iterationDone = true;
+        return;
+      }
+
+      // A stream that ends before message_stop produces no error from the
+      // SDK, but finalMessage() would then fail with "stream ended without
+      // producing a Message with role=assistant". Surface a clearer error.
+      failure ??= this.streamError
+        ?? new Anthropic.AnthropicError(
+          "The response stream ended prematurely (connection dropped before the message completed)",
+        );
+
+      // Translate SDK aborts into a DOMException AbortError so the caller's
+      // isAbortError() check takes the cancel path (same as openai.ts).
+      if (this.signal?.aborted || failure instanceof Anthropic.APIUserAbortError) {
+        throw new DOMException("Aborted", "AbortError");
+      }
+
+      if (!isRetryableStreamError(failure) || attempt >= STREAM_MAX_RETRIES) {
+        throw failure;
+      }
+
+      // Retrying is safe: the caller only persists assistant content and
+      // executes tool calls after finalMessage() succeeds.
+      const waitMs =
+        Math.min(STREAM_RETRY_MAX_DELAY_MS, STREAM_RETRY_BASE_DELAY_MS * 2 ** attempt) +
+        Math.random() * 500;
+      emitEvent("stream-retry", {
+        attempt: attempt + 1,
+        maxRetries: STREAM_MAX_RETRIES,
+        waitMs,
+        reason: streamRetryReason(failure),
+      });
+      await delay(waitMs, this.signal);
+      attempt++;
+      this.innerStream = this.track(this.createStream());
     }
   }
 
@@ -275,12 +381,26 @@ class AnthropicStream implements ProviderStream {
           : { type: "block_stop" };
       }
 
+      case "message_stop": {
+        this.sawMessageStop = true;
+        return null;
+      }
+
       default:
         return null;
     }
   }
 
   async finalMessage(): Promise<ProviderResponse> {
+    // If the caller didn't fully consume the iterator, drain it. This also
+    // runs the retry loop for prematurely ended streams.
+    if (!this.iterationDone) {
+      const iter = this[Symbol.asyncIterator]();
+      while (!(await iter.next()).done) {
+        // drain
+      }
+    }
+
     const response = await this.innerStream.finalMessage();
 
     const cacheReadTokens = response.usage.cache_read_input_tokens ?? 0;
