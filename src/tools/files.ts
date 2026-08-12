@@ -149,12 +149,14 @@ export const writeTool = defineTool({
     }
     if (existingBytes !== null) {
       const freshness = checkFileState(filePath, existingBytes);
-      if (freshness === "unread") {
-        return {
-          content: [{ type: "text", text: `File has not been read yet in this session: ${input.path}. Read it before overwriting.` }],
-          is_error: true,
-        };
-      }
+      // Disabled: the unread check is intentionally skipped so the model can
+      // write a file it already knows the content of without a prior read.
+      // if (freshness === "unread") {
+      //   return {
+      //     content: [{ type: "text", text: `File has not been read yet in this session: ${input.path}. Read it before overwriting.` }],
+      //     is_error: true,
+      //   };
+      // }
       if (freshness === "stale") {
         return {
           content: [{ type: "text", text: `File has been modified externally since it was last read, written, or edited: ${input.path}. Read it again before overwriting.` }],
@@ -189,12 +191,14 @@ export const editTool = defineTool({
     const fileBytes = await readFile(filePath);
 
     const freshness = checkFileState(filePath, fileBytes);
-    if (freshness === "unread") {
-      return {
-        content: [{ type: "text", text: `File has not been read yet in this session: ${input.path}. Read it before editing.` }],
-        is_error: true,
-      };
-    }
+    // Disabled: the unread check is intentionally skipped so the model can
+    // edit a file it already knows the content of without a prior read.
+    // if (freshness === "unread") {
+    //   return {
+    //     content: [{ type: "text", text: `File has not been read yet in this session: ${input.path}. Read it before editing.` }],
+    //     is_error: true,
+    //   };
+    // }
     if (freshness === "stale") {
       return {
         content: [{ type: "text", text: `File has been modified externally since it was last read, written, or edited: ${input.path}. Read it again before editing.` }],
