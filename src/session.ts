@@ -49,6 +49,8 @@ export type AssistantEntry = BaseEntry & {
   cacheReadTokens?: number;
   cacheCreationTokens?: number;
   cost: number;
+  /** Wall-clock time spent streaming this response, in milliseconds. */
+  streamDurationMs?: number;
   providerMetadata?: unknown;
 };
 
@@ -244,6 +246,7 @@ export function createAssistantEntry(params: CreateAssistantEntryParams): Assist
     ...(params.cacheReadTokens !== undefined && { cacheReadTokens: params.cacheReadTokens }),
     ...(params.cacheCreationTokens !== undefined && { cacheCreationTokens: params.cacheCreationTokens }),
     cost: params.cost,
+    ...(params.streamDurationMs !== undefined && { streamDurationMs: params.streamDurationMs }),
     ...(params.providerMetadata !== undefined && { providerMetadata: params.providerMetadata }),
   };
 }
@@ -620,6 +623,7 @@ function isSessionEntry(value: unknown): value is SessionEntry {
         && isOptionalNumber(value.cacheReadTokens)
         && isOptionalNumber(value.cacheCreationTokens)
         && isNumber(value.cost)
+        && isOptionalNumber(value.streamDurationMs)
       );
     case "tool_result":
       return (

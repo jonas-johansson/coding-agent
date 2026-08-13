@@ -1978,6 +1978,10 @@ async function prompt(
       const toolBlocks = new Map<string, number>();
       currentToolBlocks = toolBlocks;
 
+      // Start timing when the first stream event arrives so the TPS stat
+      // measures generation speed, not time-to-first-token.
+      const streamStart = performance.now();
+
       for await (const event of stream) {
         switch (event.type) {
           case "text_start": {
@@ -2082,6 +2086,7 @@ async function prompt(
       finishReasoningBlock();
 
       const response = await stream.finalMessage();
+      const streamDurationMs = Math.max(1, performance.now() - streamStart);
 
       // Update usage tracking
       lastCacheReadTokens = response.usage.cacheReadTokens;
@@ -2113,6 +2118,7 @@ async function prompt(
         cacheReadTokens: response.usage.cacheReadTokens,
         cacheCreationTokens: response.usage.cacheCreationTokens,
         cost: callCost,
+        streamDurationMs,
         ...(response.providerMetadata !== undefined && { providerMetadata: response.providerMetadata }),
       }));
       assistantMessagePushed = true;

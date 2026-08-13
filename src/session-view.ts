@@ -73,6 +73,8 @@ export type TurnSummary = {
   tokensIn: number;
   tokensOut: number;
   cacheReadTokens: number;
+  /** Average output tokens per second across streaming time only. */
+  tps?: number;
 };
 
 /**
@@ -100,6 +102,7 @@ export function getTurnSummary(entries: readonly SessionEntry[]): TurnSummary | 
   let tokensOut = 0;
   let cacheReadTokens = 0;
   let cost = 0;
+  let streamDurationMs = 0;
   let modelId = "";
   let modelVariant: string | undefined;
 
@@ -112,6 +115,7 @@ export function getTurnSummary(entries: readonly SessionEntry[]): TurnSummary | 
     tokensOut += entry.tokensOut;
     cacheReadTokens += entry.cacheReadTokens ?? 0;
     cost += entry.cost;
+    streamDurationMs += entry.streamDurationMs ?? 0;
     modelId = entry.modelId;
     modelVariant = entry.modelVariant;
   }
@@ -121,7 +125,9 @@ export function getTurnSummary(entries: readonly SessionEntry[]): TurnSummary | 
     ? Math.max(0, Date.parse(lastEntry.timestamp) - Date.parse(turnStart.timestamp))
     : 0;
 
-  return { modelId, modelVariant, cost, durationMs, tokensIn, tokensOut, cacheReadTokens };
+  const tps = streamDurationMs > 0 ? tokensOut / (streamDurationMs / 1000) : undefined;
+
+  return { modelId, modelVariant, cost, durationMs, tokensIn, tokensOut, cacheReadTokens, tps };
 }
 
 export function formatTurnSummary(summary: TurnSummary, costConfig: CostDisplayConfig): string {
@@ -134,6 +140,11 @@ export function formatTurnSummary(summary: TurnSummary, costConfig: CostDisplayC
   }
 
   parts.push(formatDuration(summary.durationMs));
+
+  if (summary.tps !== undefined) {
+    parts.push(formatTps(summary.tps));
+  }
+
   parts.push(`${formatTokenCount(summary.tokensIn)} in`);
   parts.push(`${formatTokenCount(summary.tokensOut)} out`);
 
@@ -143,6 +154,13 @@ export function formatTurnSummary(summary: TurnSummary, costConfig: CostDisplayC
   }
 
   return parts.join(" · ");
+}
+
+function formatTps(tps: number): string {
+  if (tps >= 10) {
+    return `${Math.round(tps)} tok/s`;
+  }
+  return `${tps.toFixed(1)} tok/s`;
 }
 
 function formatDuration(durationMs: number): string {
