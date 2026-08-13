@@ -914,11 +914,13 @@ export class Tui {
         this.moveCursorLeft();
         return true;
 
-      // Alt+Up / Alt+Down — scroll the message area
+      // Alt+Up / Alt+Down / Alt+K / Alt+J — scroll the message area
       case "\x1b[1;3A":
+      case "\x1bk":
         this.scrollBy(1);
         return true;
       case "\x1b[1;3B":
+      case "\x1bj":
         this.scrollBy(-1);
         return true;
 
