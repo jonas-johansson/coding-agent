@@ -1693,6 +1693,10 @@ async function executeToolUseBlock(
         streamedToolContent += chunk;
         tui.updateBlock(blockId, { content: streamedToolContent });
       },
+      onContent: (content) => {
+        streamedToolContent = content;
+        tui.updateBlock(blockId, { content });
+      },
     });
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");
     const toolOutput = toolToExecute.truncateOutput === false

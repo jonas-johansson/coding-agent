@@ -36,6 +36,12 @@ export type ToolExecutionContext = {
    * for what is sent back to the model.
    */
   onOutput?: (content: string) => void;
+  /**
+   * Like onOutput, but each call replaces the entire visible content instead
+   * of appending. For tools that manage their own full text (e.g. subagent
+   * progress lines). The final ToolOutput remains the source of truth.
+   */
+  onContent?: (content: string) => void;
 }
 
 type ZodObjectSchema = z.ZodObject<z.core.$ZodShape>;

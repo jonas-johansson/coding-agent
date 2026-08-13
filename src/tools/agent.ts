@@ -72,10 +72,8 @@ export const agentTool = defineTool({
     agent: z.string().describe("The agent name to invoke"),
     task: z.string().describe("The task for the agent to complete"),
   }),
-  titleFormatter: (input) => {
-    const title = `agent: ${input.agent ?? ""}${input.task ? ` — ${oneLine(input.task)}` : ""}`;
-    return title.length > 120 ? `${title.slice(0, 117)}...` : title;
-  },
+  titleFormatter: (input) =>
+    `agent: ${input.agent ?? ""}${input.task ? ` — ${oneLine(input.task)}` : ""}`,
   execute: async (input, signal, context): Promise<ToolOutput> => {
     throwIfAborted(signal);
 
@@ -100,7 +98,8 @@ export const agentTool = defineTool({
       agent,
       task: input.task,
       signal,
-      onProgress: context?.onOutput,
+      // Progress replaces the whole content; use onContent when available.
+      onProgress: context?.onContent ?? context?.onOutput,
     });
 
     const capNote = result.hitTurnCap

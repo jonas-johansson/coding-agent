@@ -78,6 +78,11 @@ export async function runSubagent(params: SubagentRunParams): Promise<SubagentRe
   let cost = 0;
   let hitTurnCap = false;
 
+  // Progress: show only the current turn and current step, e.g. "turn 2 · read".
+  // Each call carries the full text so the consumer replaces its content
+  // instead of appending (see ToolExecutionContext.onContent).
+  const progress = (step: string) => params.onProgress?.(`turn ${turns} · ${step}`);
+
   while (true) {
     if (turns >= maxTurns) {
       hitTurnCap = true;
@@ -85,7 +90,7 @@ export async function runSubagent(params: SubagentRunParams): Promise<SubagentRe
     }
     turns += 1;
     throwIfAborted(params.signal);
-    params.onProgress?.(`turn ${turns} · thinking`);
+    progress("thinking");
 
     const stream = await params.provider.stream({
       model: params.modelConfig.providerModel,
@@ -99,7 +104,7 @@ export async function runSubagent(params: SubagentRunParams): Promise<SubagentRe
 
     for await (const event of stream) {
       if (event.type === "tool_use_start") {
-        params.onProgress?.(`turn ${turns} · ${event.name}`);
+        progress(event.name);
       }
     }
 
