@@ -3740,10 +3740,10 @@ function renderInlineToolBlock(block: RenderBlock, columns: number, spinnerFrame
   const rightPad = Math.max(0, columns - 2 - totalContentWidth);
 
   const titleRendered = `${RESET}${bg(theme.bg)}${fg(theme.accent)}${truncatedTitle}`;
-  const indicatorRendered = indicator ? ` ${indicator.rendered}` : "";
+  const indicatorRendered = indicator ? `${indicator.rendered} ` : "";
   const padRendered = `${RESET}${bg(theme.bg)}${" ".repeat(rightPad)}${RESET}`;
 
-  return [`${bg(theme.bg)}  ${titleRendered}${indicatorRendered}${padRendered}`];
+  return [`${bg(theme.bg)}  ${indicatorRendered}${titleRendered}${padRendered}`];
 }
 
 /** Render a tool block as a gray panel (has content to show). */
@@ -3898,10 +3898,10 @@ function renderBlockRowWithGutter(
   // Segment text is always plain (no ANSI), so displayWidth is sufficient.
   const visible = segments.reduce((total, segment) => total + displayWidth(segment.text), 0);
   const indicatorWidth = displayWidth(indicator.text);
-  const middlePadding = Math.max(1, columns - 2 - visible - indicatorWidth - 2);
+  const middlePadding = Math.max(1, columns - 2 - visible - indicatorWidth - 3);
   const base = `${bg(theme.bg)}${fg(theme.fg)}`;
   const content = segments.map((segment) => renderSegment(segment, theme)).join("");
-  return `${base}  ${content}${RESET}${bg(theme.bg)}${fg(theme.fg)}${" ".repeat(middlePadding)}${indicator.rendered}${RESET}${bg(theme.bg)}  ${RESET}`;
+  return `${base}  ${indicator.rendered} ${content}${RESET}${bg(theme.bg)}${fg(theme.fg)}${" ".repeat(middlePadding)}${RESET}${bg(theme.bg)}  ${RESET}`;
 }
 
 function renderBlockRow(segments: StyledSegment[], theme: BlockTheme, columns: number) {
