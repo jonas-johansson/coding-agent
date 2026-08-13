@@ -1,4 +1,4 @@
-export type BlockRole = "user" | "assistant" | "reasoning" | "tool" | "error";
+export type BlockRole = "user" | "assistant" | "reasoning" | "tool" | "error" | "meta";
 
 export type BlockTheme = {
   fg: number;
@@ -56,6 +56,7 @@ export const BUILT_IN_THEMES: Record<string, TuiTheme> = {
       reasoning: { fg: 245, bg: 234, accent: 179, bold: 179 },
       tool: { fg: 252, bg: 235, accent: 117, bold: 230 },
       error: { fg: 231, bg: 88, accent: 217, bold: 223 },
+      meta: { fg: 244, bg: 234, accent: 244, bold: 250 },
       inlineTool: { fg: 245, bg: 234, accent: 117, bold: 230 },
     },
     syntax: {
@@ -94,6 +95,7 @@ export const BUILT_IN_THEMES: Record<string, TuiTheme> = {
       reasoning: { fg: 245, bg: 231, accent: 136, bold: 136 },
       tool: { fg: 235, bg: 255, accent: 68, bold: 68 },
       error: { fg: 231, bg: 167, accent: 224, bold: 230 },
+      meta: { fg: 245, bg: 231, accent: 245, bold: 240 },
       inlineTool: { fg: 245, bg: 231, accent: 68, bold: 68 },
     },
     syntax: {

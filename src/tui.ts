@@ -2566,10 +2566,11 @@ export class Tui {
     const spinnerFrame = SPINNER_FRAMES[this.spinnerFrame];
 
     // Classify each block's visual type for margin logic
-    type VisualType = "user" | "assistant" | "inline-tool" | "panel" | "error";
+    type VisualType = "user" | "assistant" | "inline-tool" | "panel" | "error" | "meta";
     const visualType = (b: RenderBlock): VisualType => {
       if (b.role === "user") return "user";
       if (b.role === "assistant" || b.role === "reasoning") return "assistant";
+      if (b.role === "meta") return "meta";
       if (b.role === "error") return "error";
       // tool
       return isInlineTool(b) ? "inline-tool" : "panel";
@@ -2641,7 +2642,7 @@ export class Tui {
         } else if (curType === "user") {
           // Skip margin if previous block has its own internal padding,
           // or is an inline tool (user cards sit flush against them).
-          if (prevType !== "panel" && prevType !== "error" && prevType !== "assistant" && prevType !== "inline-tool") {
+          if (prevType !== "panel" && prevType !== "error" && prevType !== "assistant" && prevType !== "inline-tool" && prevType !== "meta") {
             renderedBlocks.push(blackLine(columns));
             blockLineMap.push(0);
           }
@@ -2666,11 +2667,11 @@ export class Tui {
         blockLineMap.push(block.id);
       }
 
-      // Trailing margin after assistant blocks — skip only if the next
-      // visible block is another assistant (which will add its own leading
-      // margin). Empty blocks are transparent so whitespace-only text after
-      // reasoning does not suppress the margin.
-      if (curType === "assistant") {
+      // Trailing margin after assistant and meta blocks — skip only if the
+      // next visible block is another assistant (which will add its own
+      // leading margin). Empty blocks are transparent so whitespace-only text
+      // after reasoning does not suppress the margin.
+      if (curType === "assistant" || curType === "meta") {
         const nextType = nextVisibleType(blockIdx);
         if (nextType !== "assistant") {
           renderedBlocks.push(blackLine(columns));
@@ -3510,6 +3511,11 @@ function renderBlock(block: RenderBlock, columns: number, spinnerFrame: string) 
     return renderPanelToolBlock(block, columns, spinnerFrame, sanitized);
   }
 
+  // ── Meta blocks: muted one-line turn usage summary ──
+  if (block.role === "meta") {
+    return renderMetaBlock(block, columns, sanitized);
+  }
+
   // ── Error blocks: rendered as a panel with error theme ──
   return renderErrorBlock(block, columns, sanitized);
 }
@@ -3704,6 +3710,19 @@ function renderReasoningBlock(block: RenderBlock, columns: number, sanitizedCont
 
 function reasoningTitleSegments(title: string, state: "collapsed" | "expanded"): StyledSegment[] {
   return [{ text: `${title}${state === "collapsed" ? " →" : ""}`, style: "title" }];
+}
+
+/** Render a muted one-line turn usage summary (model, cost, duration, tokens). */
+function renderMetaBlock(block: RenderBlock, columns: number, sanitizedContent: string) {
+  const theme = currentTheme.blocks.meta;
+  const innerWidth = Math.max(1, columns - 4);
+  const content = sanitizedContent.trim();
+  if (!content) {
+    return [];
+  }
+
+  const rows = wrapSegments([{ text: content, style: "normal" }], innerWidth);
+  return rows.map((row) => renderBlockRow(row, theme, columns));
 }
 
 /** Render a tool block as a single inline line: `title  ✓` */
@@ -4931,7 +4950,7 @@ function isEmojiPresentation(codePoint: number) {
   );
 }
 
-function formatTokenCount(tokens: number): string {
+export function formatTokenCount(tokens: number): string {
   if (tokens >= 1_000_000) {
     const value = tokens / 1_000_000;
     return value % 1 === 0 ? `${value}M` : `${value.toFixed(1)}M`;

@@ -1,4 +1,6 @@
 import type { RenderBlock } from "./tui";
+import { formatCost, formatTokenCount } from "./tui";
+import { DEFAULT_COST_DISPLAY_CONFIG, type CostDisplayConfig } from "./config";
 import {
   getActivePath,
   type AssistantEntry,
@@ -14,11 +16,17 @@ import type { TextBlock, ToolUseBlock } from "./provider";
 
 export type SessionRenderBlock = Omit<RenderBlock, "id">;
 
-export function sessionToRenderBlocks(session: Session): SessionRenderBlock[] {
-  return entriesToRenderBlocks(getActivePath(session));
+export function sessionToRenderBlocks(
+  session: Session,
+  options?: { costConfig?: CostDisplayConfig },
+): SessionRenderBlock[] {
+  return entriesToRenderBlocks(getActivePath(session), options);
 }
 
-export function entriesToRenderBlocks(entries: readonly SessionEntry[]): SessionRenderBlock[] {
+export function entriesToRenderBlocks(
+  entries: readonly SessionEntry[],
+  options?: { costConfig?: CostDisplayConfig },
+): SessionRenderBlock[] {
   const blocks: SessionRenderBlock[] = [];
   const toolResultsByUseId = collectToolResults(entries);
   const renderedToolResultEntryIds = new Set<string>();
@@ -39,7 +47,115 @@ export function entriesToRenderBlocks(entries: readonly SessionEntry[]): Session
     }
   }
 
+  // Turn usage summary: shown once after the final assistant message of the
+  // active path. Only rendered when the path ends with an assistant entry,
+  // i.e. the turn completed (not aborted mid-turn or navigated mid-turn).
+  const lastEntry = entries[entries.length - 1];
+  if (lastEntry?.type === "assistant") {
+    const summary = getTurnSummary(entries);
+    if (summary) {
+      blocks.push({
+        key: `turn-summary:${lastEntry.id}`,
+        role: "meta",
+        content: formatTurnSummary(summary, options?.costConfig ?? DEFAULT_COST_DISPLAY_CONFIG),
+      });
+    }
+  }
+
   return blocks;
+}
+
+export type TurnSummary = {
+  modelId: string;
+  modelVariant?: string;
+  cost: number;
+  durationMs: number;
+  tokensIn: number;
+  tokensOut: number;
+  cacheReadTokens: number;
+};
+
+/**
+ * Compute the usage summary for the turn that ends with the last entry of the
+ * given list. Returns undefined when the list does not end with an assistant
+ * entry (aborted or mid-turn path). Totals span all assistant calls in the
+ * turn; duration is derived from the user entry and final assistant entry
+ * timestamps, so it includes tool execution time.
+ */
+export function getTurnSummary(entries: readonly SessionEntry[]): TurnSummary | undefined {
+  const lastEntry = entries[entries.length - 1];
+  if (!lastEntry || lastEntry.type !== "assistant") {
+    return undefined;
+  }
+
+  let turnStartIndex = 0;
+  for (let i = entries.length - 2; i >= 0; i -= 1) {
+    if (entries[i].type === "user") {
+      turnStartIndex = i;
+      break;
+    }
+  }
+
+  let tokensIn = 0;
+  let tokensOut = 0;
+  let cacheReadTokens = 0;
+  let cost = 0;
+  let modelId = "";
+  let modelVariant: string | undefined;
+
+  for (let i = turnStartIndex; i < entries.length; i += 1) {
+    const entry = entries[i];
+    if (entry.type !== "assistant") {
+      continue;
+    }
+    tokensIn += entry.tokensIn;
+    tokensOut += entry.tokensOut;
+    cacheReadTokens += entry.cacheReadTokens ?? 0;
+    cost += entry.cost;
+    modelId = entry.modelId;
+    modelVariant = entry.modelVariant;
+  }
+
+  const turnStart = entries[turnStartIndex];
+  const durationMs = turnStart && turnStart.type === "user"
+    ? Math.max(0, Date.parse(lastEntry.timestamp) - Date.parse(turnStart.timestamp))
+    : 0;
+
+  return { modelId, modelVariant, cost, durationMs, tokensIn, tokensOut, cacheReadTokens };
+}
+
+export function formatTurnSummary(summary: TurnSummary, costConfig: CostDisplayConfig): string {
+  const parts: string[] = [];
+
+  parts.push(summary.modelVariant ? `${summary.modelId}:${summary.modelVariant}` : summary.modelId);
+
+  if (summary.cost > 0) {
+    parts.push(formatCost(summary.cost, costConfig));
+  }
+
+  parts.push(formatDuration(summary.durationMs));
+  parts.push(`${formatTokenCount(summary.tokensIn)} in`);
+  parts.push(`${formatTokenCount(summary.tokensOut)} out`);
+
+  if (summary.tokensIn > 0) {
+    const cachePercent = Math.round((summary.cacheReadTokens / summary.tokensIn) * 100);
+    parts.push(`cache ${cachePercent}%`);
+  }
+
+  return parts.join(" · ");
+}
+
+function formatDuration(durationMs: number): string {
+  if (durationMs < 1000) {
+    return `${durationMs}ms`;
+  }
+  if (durationMs < 60_000) {
+    const seconds = durationMs / 1000;
+    return `${seconds % 1 === 0 ? seconds.toFixed(0) : seconds.toFixed(1)}s`;
+  }
+  const minutes = Math.floor(durationMs / 60_000);
+  const seconds = Math.round((durationMs % 60_000) / 1000);
+  return `${minutes}m ${seconds}s`;
 }
 
 function collectToolResults(entries: readonly SessionEntry[]): Map<string, ToolResultEntry[]> {

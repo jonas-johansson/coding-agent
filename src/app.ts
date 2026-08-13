@@ -4,7 +4,12 @@ import { homedir } from "os";
 import { join, resolve, extname } from "path";
 import { Tui, formatSessionCost } from "./tui";
 import { getGitBranch } from "./git.js";
-import { sessionToRenderBlocks, sessionToTreeOverlayEntries } from "./session-view";
+import {
+  formatTurnSummary,
+  getTurnSummary,
+  sessionToRenderBlocks,
+  sessionToTreeOverlayEntries,
+} from "./session-view";
 import { reasoningDisplayContent, reasoningDisplayTitle, reasoningTitle } from "./reasoning";
 import {
   appendTurnDraftEntry,
@@ -72,7 +77,7 @@ import {
 import { readClipboardImage, type SupportedImageMediaType } from "./clipboard";
 import { sendDesktopNotification } from "./notify";
 import { onEvent } from "./events";
-import { loadPaceConfig, DEFAULT_COST_DISPLAY_CONFIG } from "./config";
+import { loadPaceConfig, DEFAULT_COST_DISPLAY_CONFIG, type CostDisplayConfig } from "./config";
 import { BUILT_IN_THEMES, resolveTheme } from "./themes";
 import { setTuiTheme } from "./tui";
 import { setShikiTheme } from "./syntax";
@@ -450,6 +455,8 @@ const tui = new Tui({
   gitBranch: getGitBranch(process.cwd()) ?? "",
 });
 
+let costDisplayConfig: CostDisplayConfig = DEFAULT_COST_DISPLAY_CONFIG;
+
 let promptRunning = false;
 let currentAbortController: AbortController | null = null;
 let lastInputTokens = 0;
@@ -755,7 +762,7 @@ function refreshCwd() {
 }
 
 function rebuildTuiFromSession() {
-  tui.setBlocks(sessionToRenderBlocks(activeSession));
+  tui.setBlocks(sessionToRenderBlocks(activeSession, { costConfig: costDisplayConfig }));
 }
 
 function formatSessionWindowTitle(title: string | undefined) {
@@ -2149,6 +2156,18 @@ async function prompt(
     }
 
     await commitAndSaveTurnDraft();
+
+    // Show the turn usage summary after the final message. The draft's last
+    // entry is the final assistant entry once the turn completed.
+    const turnSummary = getTurnSummary(turnDraft.entries);
+    if (turnSummary) {
+      const lastEntry = turnDraft.entries[turnDraft.entries.length - 1];
+      tui.addBlock({
+        role: "meta",
+        key: lastEntry ? `turn-summary:${lastEntry.id}` : undefined,
+        content: formatTurnSummary(turnSummary, costDisplayConfig),
+      });
+    }
   } catch (error: unknown) {
     if (isAbortError(error)) {
       acceptToolResults = false;
@@ -2225,6 +2244,7 @@ async function main() {
 
   try {
     const paceConfig = await loadPaceConfig();
+    costDisplayConfig = paceConfig.cost;
     tui.setCostDisplayConfig(paceConfig.cost);
     applyConfiguredModels(paceConfig);
     const bg = detectTerminalBackground();
