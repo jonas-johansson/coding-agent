@@ -331,7 +331,18 @@ export class OpenCodeZenProvider implements Provider {
 
     if (!response.ok) {
       const text = await response.text().catch(() => "");
-      throw new Error(`OpenCode Zen request failed (${response.status}): ${text.slice(0, 500)}`);
+      let detail = text.slice(0, 500);
+      if (!detail.trim()) {
+        // Some gateways reject image content with a bare status code and no
+        // body. Give the user a hint instead of an empty error message.
+        const hadImages = body.messages.some(
+          (m) => Array.isArray(m.content) && m.content.some((p) => p.type === "image_url"),
+        );
+        if (hadImages) {
+          detail = "The request included image content, but this model does not accept images through OpenCode Zen. Use a vision-capable model or send the prompt without an image.";
+        }
+      }
+      throw new Error(`OpenCode Zen request failed (${response.status}): ${detail}`);
     }
 
     if (!response.body) {
