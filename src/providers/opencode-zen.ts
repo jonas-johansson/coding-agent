@@ -244,6 +244,160 @@ function toOaiTools(tools: ToolDefinition[]): OaiTool[] {
   }));
 }
 
+// ── Responses API (OpenAI-compatible) ───────────────────────────────────────
+//
+// Some OpenCode Zen models (Grok 4.x, GPT 5.x) are served through the
+// `/v1/responses` endpoint rather than `/v1/chat/completions`. The chat
+// route rejects image content for these models (bare 422), while the
+// responses route accepts it. Models opt in via the `apiStyle: "responses"`
+// provider option.
+
+type OaiResponseContentPart =
+  | { type: "input_text"; text: string }
+  | { type: "input_image"; image_url: string; detail?: string };
+
+type OaiResponseInputItem =
+  | { role: "system" | "user" | "assistant"; content: string | OaiResponseContentPart[] }
+  | { type: "function_call"; call_id: string; name: string; arguments: string }
+  | { type: "function_call_output"; call_id: string; output: string | OaiResponseContentPart[] };
+
+type OaiResponseTool = {
+  type: "function";
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+};
+
+type OaiResponseStreamEvent = {
+  type: string;
+  delta?: string;
+  item_id?: string;
+  item?: {
+    id: string;
+    type: string;
+    call_id?: string;
+    name?: string;
+    arguments?: string;
+  };
+  response?: {
+    status?: string;
+    error?: { message?: string } | null;
+    usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+      input_tokens_details?: { cached_tokens?: number };
+    };
+  };
+};
+
+function toResponsesInput(
+  system: string,
+  messages: ProviderMessage[],
+  supportsImages: boolean,
+): OaiResponseInputItem[] {
+  const items: OaiResponseInputItem[] = [
+    { role: "system", content: [{ type: "input_text", text: system }] },
+  ];
+
+  for (const msg of messages) {
+    if (msg.role === "user") {
+      // Accumulate text/image parts into one user message, then emit
+      // separate function_call_output items for tool results.
+      const parts: OaiResponseContentPart[] = [];
+
+      for (const block of msg.content) {
+        if (block.type === "text") {
+          parts.push({ type: "input_text", text: block.text });
+        } else if (block.type === "image") {
+          if (supportsImages) {
+            parts.push({
+              type: "input_image",
+              image_url: `data:${block.mediaType};base64,${block.data}`,
+              detail: "auto",
+            });
+          } else {
+            parts.push({ type: "input_text", text: `[Image: ${block.mediaType}]` });
+          }
+        } else {
+          // tool_result — flush accumulated parts first
+          if (parts.length > 0) {
+            items.push({ role: "user", content: parts });
+            parts.length = 0;
+          }
+
+          const outputParts: OaiResponseContentPart[] = [];
+          for (const part of block.content) {
+            if (part.type === "text") {
+              outputParts.push({
+                type: "input_text",
+                text: block.is_error ? `Error: ${part.text}` : part.text,
+              });
+            } else if (part.type === "image") {
+              if (supportsImages) {
+                outputParts.push({
+                  type: "input_image",
+                  image_url: `data:${part.mediaType};base64,${part.data}`,
+                  detail: "auto",
+                });
+              } else {
+                outputParts.push({ type: "input_text", text: `[Image: ${part.mediaType}]` });
+              }
+            }
+          }
+
+          items.push({
+            type: "function_call_output",
+            call_id: block.tool_use_id,
+            output: outputParts.length === 1 && outputParts[0].type === "input_text"
+              ? outputParts[0].text
+              : outputParts,
+          });
+        }
+      }
+
+      if (parts.length > 0) {
+        items.push({ role: "user", content: parts });
+      }
+    } else {
+      // assistant — translate from ContentBlock format. Prior reasoning is
+      // not replayed: the responses API has no reasoning_content field.
+      const textParts: string[] = [];
+
+      for (const block of msg.content) {
+        if (block.type === "text") {
+          textParts.push(block.text);
+        } else {
+          if (textParts.length > 0) {
+            items.push({ role: "assistant", content: textParts.join("\n") });
+            textParts.length = 0;
+          }
+          items.push({
+            type: "function_call",
+            call_id: block.id,
+            name: block.name,
+            arguments: typeof block.input === "string" ? block.input : JSON.stringify(block.input),
+          });
+        }
+      }
+
+      if (textParts.length > 0) {
+        items.push({ role: "assistant", content: textParts.join("\n") });
+      }
+    }
+  }
+
+  return items;
+}
+
+function toResponsesTools(tools: ToolDefinition[]): OaiResponseTool[] {
+  return tools.map((t) => ({
+    type: "function",
+    name: t.name,
+    description: t.description,
+    parameters: t.inputSchema,
+  }));
+}
+
 // ── SSE line parser ─────────────────────────────────────────────────────────
 
 async function* parseSseLines(reader: ReadableStreamDefaultReader<Uint8Array>): AsyncGenerator<string> {
@@ -303,23 +457,40 @@ export class OpenCodeZenProvider implements Provider {
     providerOptions?: Record<string, unknown>;
     signal?: AbortSignal;
   }): Promise<ProviderStream> {
-    // supportsImages is a provider-native formatting hint, not an API parameter.
+    // supportsImages and apiStyle are provider-native formatting hints, not
+    // API parameters.
     const providerOptions = params.providerOptions ?? {};
-    const { supportsImages: supportsImagesOption, ...restProviderOptions } = providerOptions;
+    const {
+      supportsImages: supportsImagesOption,
+      apiStyle: apiStyleOption,
+      ...restProviderOptions
+    } = providerOptions;
     const supportsImages = (supportsImagesOption as boolean | undefined) ?? true;
+    const apiStyle = (apiStyleOption as string | undefined) ?? "chat";
 
-    const body = {
-      model: params.model,
-      messages: toOaiMessages(params.system, params.messages, supportsImages),
-      tools: toOaiTools(params.tools),
-      max_tokens: params.maxTokens,
-      stream: true,
-      // Include usage in the streamed response
-      stream_options: { include_usage: true },
-      ...restProviderOptions,
-    };
+    const endpoint = apiStyle === "responses" ? "responses" : "chat/completions";
 
-    const response = await fetch(`${this.baseUrl}/chat/completions`, {
+    const body = apiStyle === "responses"
+      ? {
+          model: params.model,
+          input: toResponsesInput(params.system, params.messages, supportsImages),
+          tools: toResponsesTools(params.tools),
+          max_output_tokens: params.maxTokens,
+          stream: true,
+          ...restProviderOptions,
+        }
+      : {
+          model: params.model,
+          messages: toOaiMessages(params.system, params.messages, supportsImages),
+          tools: toOaiTools(params.tools),
+          max_tokens: params.maxTokens,
+          stream: true,
+          // Include usage in the streamed response
+          stream_options: { include_usage: true },
+          ...restProviderOptions,
+        };
+
+    const response = await fetch(`${this.baseUrl}/${endpoint}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -335,9 +506,15 @@ export class OpenCodeZenProvider implements Provider {
       if (!detail.trim()) {
         // Some gateways reject image content with a bare status code and no
         // body. Give the user a hint instead of an empty error message.
-        const hadImages = body.messages.some(
-          (m) => Array.isArray(m.content) && m.content.some((p) => p.type === "image_url"),
-        );
+        const hadImages = apiStyle === "responses"
+          ? (body as { input: OaiResponseInputItem[] }).input.some(
+              (item) => "content" in item
+                && Array.isArray(item.content)
+                && item.content.some((p) => p.type === "input_image"),
+            )
+          : (body as { messages: OaiMessage[] }).messages.some(
+              (m) => Array.isArray(m.content) && m.content.some((p) => p.type === "image_url"),
+            );
         if (hadImages) {
           detail = "The request included image content, but this model does not accept images through OpenCode Zen. Use a vision-capable model or send the prompt without an image.";
         }
@@ -347,6 +524,10 @@ export class OpenCodeZenProvider implements Provider {
 
     if (!response.body) {
       throw new Error("OpenCode Zen response has no body");
+    }
+
+    if (apiStyle === "responses") {
+      return new OpenCodeZenResponsesStream(response.body.getReader());
     }
 
     return new OpenCodeZenStream(response.body.getReader());
@@ -544,6 +725,207 @@ class OpenCodeZenStream implements ProviderStream {
 
     const stopReason: "end_turn" | "tool_use" =
       this.finishReason === "tool_calls" ? "tool_use" : "end_turn";
+
+    const metadata: OpenCodeZenMetadata | undefined = this.fullReasoningContent
+      ? { provider: "opencode-zen", reasoningContent: this.fullReasoningContent }
+      : undefined;
+
+    return {
+      content,
+      stopReason,
+      usage: this.usage,
+      ...(metadata && { providerMetadata: metadata }),
+    };
+  }
+}
+
+/**
+ * Stream adapter for the Responses API (`/v1/responses`), used by models
+ * that are served through that endpoint (Grok 4.x, GPT 5.x).
+ */
+class OpenCodeZenResponsesStream implements ProviderStream {
+  private reader: ReadableStreamDefaultReader<Uint8Array>;
+
+  // Accumulated state built up during iteration, consumed by finalMessage().
+  private finishReason: string | null = null;
+  private fullReasoningContent = "";
+  private fullTextContent = "";
+  private completedToolCalls: PendingToolCall[] = [];
+  private pendingToolCalls = new Map<string, PendingToolCall>();
+  private usage: UsageInfo = {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheCreationTokens: 0,
+  };
+  private iterationDone = false;
+  private failure: Error | null = null;
+
+  constructor(reader: ReadableStreamDefaultReader<Uint8Array>) {
+    this.reader = reader;
+  }
+
+  async *[Symbol.asyncIterator](): AsyncIterator<StreamEvent> {
+    const startedTools = new Set<string>();
+    let openBlock: "text" | "reasoning" | undefined;
+
+    for await (const line of parseSseLines(this.reader)) {
+      let event: OaiResponseStreamEvent;
+      try {
+        event = JSON.parse(line) as OaiResponseStreamEvent;
+      } catch {
+        continue;
+      }
+
+      // ── Failure ──
+      if (event.type === "response.failed") {
+        const message = event.response?.error?.message;
+        this.failure = new Error(
+          `OpenCode Zen response failed: ${message ?? "unknown error"}`,
+        );
+        break;
+      }
+
+      // ── Usage and completion ──
+      if (event.type === "response.completed" && event.response) {
+        const usage = event.response.usage;
+        if (usage) {
+          this.usage = {
+            inputTokens: usage.input_tokens ?? 0,
+            outputTokens: usage.output_tokens ?? 0,
+            cacheReadTokens: usage.input_tokens_details?.cached_tokens ?? 0,
+            cacheCreationTokens: 0,
+          };
+        }
+        this.finishReason = event.response.status === "completed" ? "stop" : event.response.status ?? "stop";
+        continue;
+      }
+
+      // ── Tool call start ──
+      if (event.type === "response.output_item.added" && event.item?.type === "function_call") {
+        const itemId = event.item.id;
+        const callId = event.item.call_id ?? itemId;
+        const pending = {
+          id: callId,
+          streamId: callId,
+          name: event.item.name ?? "",
+          arguments: event.item.arguments ?? "",
+        };
+        this.pendingToolCalls.set(itemId, pending);
+
+        if (openBlock) {
+          openBlock = undefined;
+          yield { type: "block_stop" };
+        }
+
+        if (pending.name && !startedTools.has(pending.streamId)) {
+          startedTools.add(pending.streamId);
+          yield { type: "tool_use_start", id: pending.streamId, name: pending.name };
+        }
+        continue;
+      }
+
+      // ── Tool call arguments ──
+      if (event.type === "response.function_call_arguments.delta" && event.item_id) {
+        const pending = this.pendingToolCalls.get(event.item_id);
+        if (pending && event.delta) {
+          pending.arguments += event.delta;
+          yield { type: "tool_input_delta", id: pending.streamId, partialJson: event.delta };
+        }
+        continue;
+      }
+
+      // ── Reasoning content ──
+      const reasoningDelta =
+        event.type === "response.reasoning_text.delta"
+        || event.type === "response.reasoning_summary_text.delta"
+          ? event.delta
+          : undefined;
+      if (reasoningDelta != null && reasoningDelta !== "") {
+        if (openBlock === "text") {
+          yield { type: "block_stop" };
+          openBlock = undefined;
+        }
+
+        if (openBlock !== "reasoning") {
+          openBlock = "reasoning";
+          yield { type: "reasoning_start", text: reasoningDelta };
+        } else {
+          yield { type: "reasoning_delta", text: reasoningDelta };
+        }
+        this.fullReasoningContent += reasoningDelta;
+        continue;
+      }
+
+      // ── Text content ──
+      if (event.type === "response.output_text.delta" && event.delta != null && event.delta !== "") {
+        if (openBlock === "reasoning") {
+          yield { type: "block_stop" };
+          openBlock = undefined;
+        }
+
+        if (openBlock !== "text") {
+          openBlock = "text";
+          yield { type: "text_start", text: event.delta };
+        } else {
+          yield { type: "text_delta", text: event.delta };
+        }
+        this.fullTextContent += event.delta;
+      }
+    }
+
+    if (openBlock) {
+      yield { type: "block_stop" };
+    }
+
+    for (const id of startedTools) {
+      yield { type: "block_stop", id };
+    }
+
+    for (const [, tc] of this.pendingToolCalls) {
+      this.completedToolCalls.push(tc);
+    }
+
+    this.iterationDone = true;
+  }
+
+  async finalMessage(): Promise<ProviderResponse> {
+    if (!this.iterationDone) {
+      const iter = this[Symbol.asyncIterator]();
+      while (!(await iter.next()).done) {
+        // drain
+      }
+    }
+
+    if (this.failure) {
+      throw this.failure;
+    }
+
+    const content: ContentBlock[] = [];
+
+    if (this.fullTextContent) {
+      content.push({ type: "text", text: this.fullTextContent });
+    }
+
+    for (const tc of this.completedToolCalls) {
+      let input: unknown;
+      try {
+        input = JSON.parse(tc.arguments);
+      } catch {
+        input = tc.arguments;
+      }
+      content.push({
+        type: "tool_use",
+        id: tc.streamId,
+        name: tc.name,
+        input,
+      });
+    }
+
+    const stopReason: "end_turn" | "tool_use" =
+      this.finishReason === "tool_calls" || this.completedToolCalls.length > 0
+        ? "tool_use"
+        : "end_turn";
 
     const metadata: OpenCodeZenMetadata | undefined = this.fullReasoningContent
       ? { provider: "opencode-zen", reasoningContent: this.fullReasoningContent }

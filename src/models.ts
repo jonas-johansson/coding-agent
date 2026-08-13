@@ -461,7 +461,8 @@ export const MODEL_METADATA: Record<string, ModelMetadata> = {
   "opencode/gpt-5.5": {
     contextWindow: 1_050_000,
     maxOutputTokens: 128_000,
-    supportsImages: false,
+    supportsImages: true,
+    providerOptions: { apiStyle: "responses" },
     variants: GPT_5_5_REASONING_VARIANTS,
     pricing: {
       inputPerMTok: 5.00,
@@ -480,10 +481,25 @@ export const MODEL_METADATA: Record<string, ModelMetadata> = {
     },
   },
   "opencode/grok-4.6": {
-    contextWindow: 128_000,
-    maxOutputTokens: 16_000,
-    supportsImages: false,
-    pricing: ZERO_PRICING,
+    contextWindow: 500_000,
+    maxOutputTokens: 32_000,
+    supportsImages: true,
+    providerOptions: { apiStyle: "responses" },
+    pricing: {
+      inputPerMTok: 2.00,
+      cacheWritePerMTok: 0,
+      cacheReadPerMTok: 0.50,
+      outputPerMTok: 6.00,
+    },
+    longContextPricing: {
+      inputTokenThreshold: 200_000,
+      pricing: {
+        inputPerMTok: 4.00,
+        cacheWritePerMTok: 0,
+        cacheReadPerMTok: 1.00,
+        outputPerMTok: 12.00,
+      },
+    },
   },
   "openai/gpt-5.5": {
     contextWindow: 1_050_000,
