@@ -59,6 +59,8 @@ export type ToolResultEntry = BaseEntry & {
   toolUseId: string;
   content: ToolResultPart[];
   isError?: boolean;
+  /** Optional cost incurred by the tool call (e.g. subagent model usage). */
+  cost?: number;
 };
 
 export type SessionEntry = UserEntry | AssistantEntry | ToolResultEntry;
@@ -258,6 +260,7 @@ export function createToolResultEntry(params: CreateToolResultEntryParams): Tool
     toolUseId: params.toolUseId,
     content: params.content,
     ...(params.isError && { isError: true }),
+    ...(params.cost !== undefined && { cost: params.cost }),
   };
 }
 
@@ -548,7 +551,8 @@ function validateLoadedSession(
 function toSessionListItem(session: Session, filePath: string): SessionListItem {
   const title = session.title ?? firstUserMessagePreview(session);
   const cost = session.entries.reduce(
-    (sum, entry) => sum + (entry.type === "assistant" ? entry.cost : 0),
+    (sum, entry) => sum + (entry.type === "assistant" ? entry.cost : 0)
+      + (entry.type === "tool_result" ? (entry.cost ?? 0) : 0),
     0,
   );
 
@@ -631,6 +635,7 @@ function isSessionEntry(value: unknown): value is SessionEntry {
         && Array.isArray(value.content)
         && value.content.every(isToolResultPart)
         && isOptionalBoolean(value.isError)
+        && isOptionalNumber(value.cost)
       );
     default:
       return false;

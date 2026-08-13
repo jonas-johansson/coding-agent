@@ -43,7 +43,11 @@ import {
   truncateToolOutputIfNeeded,
   isAbortError,
   getProviderToolDefinitions,
+  toProviderToolDefinitions,
   setCurrentSkills,
+  setCurrentAgents,
+  setAgentRuntime,
+  filterToolsForAgent,
 } from "./tool";
 import {
   discoverSkills,
@@ -52,6 +56,12 @@ import {
   formatSkillsSystemPromptBlock,
   formatSkillsListing,
 } from "./skill";
+import {
+  discoverAgents,
+  formatAgentsListing,
+  loadAgentBody,
+} from "./agent";
+import { runSubagent } from "./subagent";
 import type {
   Provider,
   ProviderStream,
@@ -389,6 +399,7 @@ const tui = new Tui({
     { label: "/undo", detail: "Undo the last user turn", kind: "command", insertText: "/undo" },
     { label: "/skills", detail: "List available skills", kind: "command", insertText: "/skills " },
     { label: "/skill:<name>", detail: "Load and run a skill", kind: "command", insertText: "/skill:" },
+    { label: "/agents", detail: "List available agents", kind: "command", insertText: "/agents " },
     { label: "/mcp", detail: "List connected MCP servers and tools", kind: "command", insertText: "/mcp" },
     { label: "/mcps", detail: "Enable or disable MCP servers (Ctrl+E)", kind: "command", insertText: "/mcps", executeOnAccept: true },
     { label: "/theme", detail: "Show or switch theme", kind: "command", insertText: "/theme " },
@@ -669,7 +680,8 @@ function refreshSessionStatsFromSession() {
   lastCacheReadTokens = lastAssistantEntry?.cacheReadTokens ?? 0;
   lastCacheCreationTokens = lastAssistantEntry?.cacheCreationTokens ?? 0;
   accumulatedCost = activeSession.entries.reduce(
-    (sum, entry) => sum + (entry.type === "assistant" ? entry.cost : 0),
+    (sum, entry) => sum + (entry.type === "assistant" ? entry.cost : 0)
+      + (entry.type === "tool_result" ? (entry.cost ?? 0) : 0),
     0,
   );
   updateContextInfo();
@@ -1314,6 +1326,15 @@ async function handleCommand(command: string): Promise<boolean> {
       });
       return true;
     }
+    case "/agents": {
+      const agents = await discoverAgents();
+      tui.addBlock({
+        role: "assistant",
+        title: "Agents",
+        content: formatAgentsListing(agents),
+      });
+      return true;
+    }
     case "/mcp": {
       tui.addBlock({
         role: "assistant",
@@ -1620,11 +1641,16 @@ function makeToolErrorResult(toolUseId: string, text: string): ToolResultContent
   };
 }
 
+type ExecutedTool = {
+  result: ToolResultContent;
+  cost?: number;
+};
+
 async function executeToolUseBlock(
   contentBlock: ToolUseBlock,
   toolBlocks: Map<string, number>,
   signal: AbortSignal,
-): Promise<ToolResultContent> {
+): Promise<ExecutedTool> {
   if (signal.aborted) throw new DOMException("Aborted", "AbortError");
 
   const toolToExecute = tools.find((tool) => tool.name === contentBlock.name);
@@ -1633,7 +1659,7 @@ async function executeToolUseBlock(
   if (!toolToExecute) {
     const errorText = `Couldn't find tool ${contentBlock.name}`;
     tui.updateBlock(blockId, { content: errorText, state: "error" });
-    return makeToolErrorResult(contentBlock.id, errorText);
+    return { result: makeToolErrorResult(contentBlock.id, errorText) };
   }
 
   const inputParseResult = toolToExecute.inputSchema.safeParse(contentBlock.input);
@@ -1648,10 +1674,12 @@ async function executeToolUseBlock(
       state: "error",
     });
 
-    return makeToolErrorResult(
-      contentBlock.id,
-      `Input did not match schema: ${JSON.stringify(inputParseResult.error.issues)}`,
-    );
+    return {
+      result: makeToolErrorResult(
+        contentBlock.id,
+        `Input did not match schema: ${JSON.stringify(inputParseResult.error.issues)}`,
+      ),
+    };
   }
 
   tui.updateBlock(blockId, { title: visualizeToolTitle(contentBlock.name, inputParseResult.data) });
@@ -1677,21 +1705,31 @@ async function executeToolUseBlock(
       state: toolOutput.is_error ? "error" : "done",
     });
 
+    // Tools can report their own cost (e.g. subagent model usage). Add it to
+    // the session total; it is also persisted on the tool_result entry.
+    if (toolOutput.cost !== undefined && toolOutput.cost > 0) {
+      accumulatedCost += toolOutput.cost;
+      tui.setCost(accumulatedCost);
+    }
+
     return {
-      type: "tool_result",
-      tool_use_id: contentBlock.id,
-      content: toolOutput.content.reduce<ToolResultPart[]>((acc, p) => {
-        if (p.type === "text") acc.push({ type: "text", text: p.text });
-        else if (p.type === "image" && p.source.type === "base64") acc.push({ type: "image", mediaType: p.source.media_type, data: p.source.data });
-        return acc;
-      }, []),
-      ...(toolOutput.is_error && { is_error: true }),
+      result: {
+        type: "tool_result",
+        tool_use_id: contentBlock.id,
+        content: toolOutput.content.reduce<ToolResultPart[]>((acc, p) => {
+          if (p.type === "text") acc.push({ type: "text", text: p.text });
+          else if (p.type === "image" && p.source.type === "base64") acc.push({ type: "image", mediaType: p.source.media_type, data: p.source.data });
+          return acc;
+        }, []),
+        ...(toolOutput.is_error && { is_error: true }),
+      },
+      ...(toolOutput.cost !== undefined && { cost: toolOutput.cost }),
     };
   } catch (error: unknown) {
     if (isAbortError(error)) throw error;
     const errorText = formatError(error);
     tui.updateBlock(blockId, { content: errorText, state: "error" });
-    return makeToolErrorResult(contentBlock.id, errorText);
+    return { result: makeToolErrorResult(contentBlock.id, errorText) };
   } finally {
     refreshCwd();
   }
@@ -1701,21 +1739,21 @@ async function executeToolUseBatch(
   toolUseBlocks: ToolUseBlock[],
   toolBlocks: Map<string, number>,
   signal: AbortSignal,
-  onComplete: (toolUseId: string, result: ToolResultContent) => void,
-): Promise<ToolResultContent[]> {
+  onComplete: (toolUseId: string, executed: ExecutedTool) => void,
+): Promise<ExecutedTool[]> {
   const hasExclusiveTool = toolUseBlocks.some((contentBlock) => {
     const toolToExecute = tools.find((tool) => tool.name === contentBlock.name);
     return toolToExecute?.concurrency !== "safe";
   });
 
-  const runOne = async (contentBlock: ToolUseBlock): Promise<ToolResultContent> => {
-    const result = await executeToolUseBlock(contentBlock, toolBlocks, signal);
-    onComplete(contentBlock.id, result);
-    return result;
+  const runOne = async (contentBlock: ToolUseBlock): Promise<ExecutedTool> => {
+    const executed = await executeToolUseBlock(contentBlock, toolBlocks, signal);
+    onComplete(contentBlock.id, executed);
+    return executed;
   };
 
   if (hasExclusiveTool) {
-    const results: ToolResultContent[] = [];
+    const results: ExecutedTool[] = [];
     for (const contentBlock of toolUseBlocks) {
       results.push(await runOne(contentBlock));
     }
@@ -1864,27 +1902,76 @@ async function prompt(
   let anyAssistantMessagePushed = false;
   let pendingToolUseIds: string[] = [];
   let currentToolUseOrder: string[] = [];
-  let completedToolResults = new Map<string, ToolResultContent>();
+  let completedToolResults = new Map<string, ExecutedTool>();
   let acceptToolResults = true;
   let currentToolBlocks = new Map<string, number>();
   let imageCapNoticeShown = false;
 
-  const appendToolResultToDraft = (toolResult: ToolResultContent) => {
+  const appendToolResultToDraft = (executed: ExecutedTool) => {
     appendTurnDraftEntry(turnDraft, createToolResultEntry({
-      toolUseId: toolResult.tool_use_id,
-      content: toolResult.content,
-      ...(toolResult.is_error && { isError: true }),
+      toolUseId: executed.result.tool_use_id,
+      content: executed.result.content,
+      ...(executed.result.is_error && { isError: true }),
+      ...(executed.cost !== undefined && { cost: executed.cost }),
     }));
   };
 
-  const [globalAgentsFileContents, agentsFileContents, skills] = await Promise.all([
+  const [globalAgentsFileContents, agentsFileContents, skills, agents] = await Promise.all([
     loadGlobalAgentsFile(),
     loadAgentsFile(),
     discoverSkills(),
+    discoverAgents(),
   ]);
 
   // Update the skill tool with the current set of skills
   setCurrentSkills(skills);
+
+  // Update the agent tool with the current set of agents
+  setCurrentAgents(agents);
+
+  // Inject the subagent runtime into the agent tool. The closure owns the
+  // provider, model, system prompt, and cost wiring because those live here.
+  setAgentRuntime({
+    run: async ({ agent, task, signal, onProgress }) => {
+      const modelConfig = agent.model !== undefined
+        ? (getModelConfig(agent.model) ?? currentModelConfig())
+        : currentModelConfig();
+      const provider = await getProvider(modelConfig);
+      const body = await loadAgentBody(agent);
+
+      const system = [
+        `You are ${agent.name}, a subagent of the Pace coding agent. You work in an isolated context window and do not see the main conversation. Complete the task you are given. Work autonomously with your tools. When you are done, return a concise final report with the key results and any important file paths.`,
+        `Current working directory: ${formatCwd(process.cwd())}`,
+        `Current date (YYYY-MM-DD): ${new Date().toISOString().split("T")[0]}`,
+        ...(globalAgentsFileContents
+          ? [`# Global instructions (from ~/.config/pace/AGENTS.md)\n\n${globalAgentsFileContents}`]
+          : []),
+        ...(agentsFileContents
+          ? [`# Project-specific instructions (from AGENTS.md)\n\n${agentsFileContents}`]
+          : []),
+        body,
+      ].join("\n\n---\n\n");
+
+      return runSubagent({
+        system,
+        task,
+        tools: filterToolsForAgent(agent),
+        toolDefs: toProviderToolDefinitions(filterToolsForAgent(agent)),
+        provider,
+        modelConfig,
+        signal,
+        onProgress,
+        onUsage: (usage) => computeCallCost(
+          modelConfig,
+          usage.inputTokens,
+          usage.inputTokens - usage.cacheCreationTokens - usage.cacheReadTokens,
+          usage.cacheCreationTokens,
+          usage.cacheReadTokens,
+          usage.outputTokens,
+        ),
+      });
+    },
+  });
 
   const baseSystem = `You are Pace, a highly capable coding agent designed to assist with software development tasks.\n\nCurrent working directory: ${formatCwd(process.cwd())}\n\nCurrent date (YYYY-MM-DD): ${new Date().toISOString().split("T")[0]}\n\nWhen operating on files or directories in the current working directory, use relative paths rather than absolute paths.\n\nWhen listing files, use \`/bin/ls -1\` to show only filenames (one per line, no icons or extra info). Only add flags like \`-la\` if the user explicitly asks for more details.\n\nWhen searching files with Bash, prefer \`rg\`/\`rg --files\` over \`grep -R\`, \`find .\`, or \`ls -R\` because ripgrep respects \`.gitignore\`; do not run unbounded recursive searches, and if \`rg\` is unavailable explicitly exclude \`node_modules\`, \`.git\`, \`dist\`, \`build\`, \`coverage\`, \`.next\`, and \`vendor\`.`;
 
@@ -2130,26 +2217,26 @@ async function prompt(
       const toolUseBlocks = response.content.filter(isToolUseBlock);
       pendingToolUseIds = toolUseBlocks.map((block) => block.id);
       currentToolUseOrder = pendingToolUseIds;
-      completedToolResults = new Map<string, ToolResultContent>();
+      completedToolResults = new Map<string, ExecutedTool>();
       acceptToolResults = true;
 
       if (toolUseBlocks.length > 0) {
-        const toolResults = await executeToolUseBatch(
+        const executedTools = await executeToolUseBatch(
           toolUseBlocks,
           toolBlocks,
           signal,
-          (toolUseId, toolResult) => {
+          (toolUseId, executed) => {
             if (!acceptToolResults) return;
-            completedToolResults.set(toolUseId, toolResult);
+            completedToolResults.set(toolUseId, executed);
             pendingToolUseIds = pendingToolUseIds.filter((id) => id !== toolUseId);
           },
         );
 
-        for (const toolResult of toolResults) {
-          appendToolResultToDraft(toolResult);
+        for (const executed of executedTools) {
+          appendToolResultToDraft(executed);
         }
         currentToolUseOrder = [];
-        completedToolResults = new Map<string, ToolResultContent>();
+        completedToolResults = new Map<string, ExecutedTool>();
       }
 
       if (toolUseBlocks.length > 0 || response.stopReason === "tool_use") {
@@ -2186,9 +2273,9 @@ async function prompt(
 
       if (assistantMessagePushed && pendingToolUseIds.length > 0) {
         for (const toolUseId of currentToolUseOrder) {
-          const toolResult = completedToolResults.get(toolUseId)
-            ?? makeToolErrorResult(toolUseId, "Tool execution was cancelled by the user.");
-          appendToolResultToDraft(toolResult);
+          const executed = completedToolResults.get(toolUseId)
+            ?? { result: makeToolErrorResult(toolUseId, "Tool execution was cancelled by the user.") };
+          appendToolResultToDraft(executed);
         }
       }
 
@@ -2222,6 +2309,7 @@ const exampleTable = `| Command | Description |
 | /resume <session-id> | Resume a saved session by id. |
 | /undo | Rewind to before the last user message. |
 | /skills | List discovered skills available in the current directory. |
+| /agents | List available subagents for the current directory. |
 | /mcp | List connected MCP servers and their tools. |
 | /skill:<name> [args] | Run a discovered skill with optional arguments. Use /skills to see available skills.`;
 

@@ -47,6 +47,7 @@ export async function truncateToolOutputIfNeeded(
   return {
     content: [{ type: "text", text: truncatedText }],
     ...(output.is_error && { is_error: true }),
+    ...(output.cost !== undefined && { cost: output.cost }),
   };
 }
 

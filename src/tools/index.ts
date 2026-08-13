@@ -2,6 +2,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import type { ToolDefinition } from "../provider";
 import { formatSkillsForToolDescription } from "../skill";
+import { formatAgentsForToolDescription } from "../agent";
 import { registerTool, tools, type ToolDescriptor } from "./core";
 import { readTool, writeTool, editTool } from "./files";
 import { bashTool } from "./bash";
@@ -9,6 +10,13 @@ import { toolComposerTool } from "./tool-composer";
 import { webFetchTool } from "./web-fetch";
 import { webSearchTool } from "./web-search";
 import { skillTool, setCurrentSkills, getCurrentSkills } from "./skill";
+import {
+  agentTool,
+  getCurrentAgents,
+  setCurrentAgents,
+  setAgentRuntime,
+  filterToolsForAgent,
+} from "./agent";
 
 const builtInTools: ToolDescriptor[] = [
   readTool,
@@ -19,6 +27,7 @@ const builtInTools: ToolDescriptor[] = [
   webFetchTool,
   webSearchTool,
   skillTool,
+  agentTool,
 ];
 
 builtInTools.forEach(registerTool);
@@ -26,6 +35,7 @@ builtInTools.forEach(registerTool);
 export * from "./core";
 export { truncateToolOutputIfNeeded } from "./output";
 export { setCurrentSkills };
+export { setCurrentAgents, setAgentRuntime, filterToolsForAgent };
 
 function makeAnthropicToolsFromCustomTools() {
   let transformedTools: Anthropic.Tool[] = [];
@@ -42,30 +52,44 @@ function makeAnthropicToolsFromCustomTools() {
 export const toolsTransformedToAnthropicStyle: Anthropic.Tool[] = makeAnthropicToolsFromCustomTools();
 
 /**
- * Provider-agnostic tool definitions. Used by the provider abstraction layer
- * so each provider can serialise tools into its own API format.
- *
- * The skill tool's description is dynamically augmented with the current
- * skill listing so the model can see available skills in the tool schema.
+ * Augment a tool's description with dynamic listings (skills, agents).
  */
-export function getProviderToolDefinitions(): ToolDefinition[] {
-  const currentSkills = getCurrentSkills();
+function augmentToolDescription(tool: ToolDescriptor): string {
+  let description = tool.description;
 
-  return tools.map((t) => {
-    let description = t.description;
-
-    // Dynamically append skill listing to the skill tool
-    if (t.name === "skill" && currentSkills.length > 0) {
-      const listing = formatSkillsForToolDescription(currentSkills);
-      if (listing) {
-        description = `${description}\n\nAvailable skills:\n${listing}`;
-      }
+  // Dynamically append skill listing to the skill tool
+  if (tool.name === "skill" && getCurrentSkills().length > 0) {
+    const listing = formatSkillsForToolDescription(getCurrentSkills());
+    if (listing) {
+      description = `${description}\n\nAvailable skills:\n${listing}`;
     }
+  }
 
-    return {
-      name: t.name,
-      description,
-      inputSchema: z.toJSONSchema(t.inputSchema) as Record<string, unknown>,
-    };
-  });
+  // Dynamically append agent listing to the agent tool
+  if (tool.name === "agent" && getCurrentAgents().length > 0) {
+    const listing = formatAgentsForToolDescription(getCurrentAgents());
+    if (listing) {
+      description = `${description}\n\nAvailable agents:\n${listing}`;
+    }
+  }
+
+  return description;
+}
+
+/**
+ * Provider-agnostic tool definitions for a specific tool list.
+ * Used by the provider abstraction layer so each provider can serialise
+ * tools into its own API format.
+ */
+export function toProviderToolDefinitions(toolList: ToolDescriptor[]): ToolDefinition[] {
+  return toolList.map((t) => ({
+    name: t.name,
+    description: augmentToolDescription(t),
+    inputSchema: z.toJSONSchema(t.inputSchema) as Record<string, unknown>,
+  }));
+}
+
+/** Provider-agnostic tool definitions for the main agent. */
+export function getProviderToolDefinitions(): ToolDefinition[] {
+  return toProviderToolDefinitions(tools);
 }

@@ -42,7 +42,7 @@ export const toolComposerTool = defineTool({
     language: z.enum(["javascript"]).default("javascript").describe("Script language. Currently only javascript is supported."),
     code: z.string().describe("Complete JavaScript code that defines exactly `async function main({ ctx, tools, args, log }) { ... }`. Do not provide only the function body or any other signature. Use return inside main for the final result."),
     args: z.record(z.string(), z.unknown()).optional().describe("Optional JSON-serializable arguments available to the script as `args`."),
-    allowedTools: z.array(z.string()).optional().describe("Optional allowlist of Pace tool names the script may call. If omitted, all tools except `tool_composer` are available."),
+    allowedTools: z.array(z.string()).optional().describe("Optional allowlist of Pace tool names the script may call. If omitted, all tools except `tool_composer` and `agent` are available."),
     timeoutSeconds: z.number().int().positive().max(300).optional().describe("Maximum runtime in seconds. Defaults to 60, max 300."),
     maxToolCalls: z.number().int().positive().max(SCRIPT_MAX_TOOL_CALLS).optional().describe("Maximum number of internal Pace tool calls. Defaults to 100, max 500."),
   }),
@@ -231,6 +231,11 @@ async function runJavascriptScript(options: ScriptRunOptions): Promise<ToolOutpu
     try {
       if (message.name === "tool_composer") {
         throw new Error("tool_composer may not call itself recursively");
+      }
+      // Enforce the depth-1 rule: subagents cannot spawn subagents, and
+      // tool_composer must not be a backdoor around it.
+      if (message.name === "agent") {
+        throw new Error("The agent tool is not available inside tool_composer scripts");
       }
       const toolToExecute = tools.find((tool) => tool.name === message.name);
       if (!toolToExecute) {

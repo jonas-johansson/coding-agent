@@ -15,6 +15,13 @@ export function isAbortError(error: unknown): boolean {
 export type ToolOutput = {
   content: Array<Anthropic.TextBlockParam | Anthropic.ImageBlockParam | Anthropic.SearchResultBlockParam | Anthropic.DocumentBlockParam | Anthropic.ToolReferenceBlockParam>;
   is_error?: boolean;
+  /**
+   * Optional cost incurred by this tool call (e.g. subagent model usage).
+   * The caller adds it to the session total and persists it in the
+   * tool_result session entry. Tools that invoke models or paid services
+   * should report their cost here.
+   */
+  cost?: number;
 }
 
 export type ToolDisplayBlock = {

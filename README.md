@@ -31,6 +31,7 @@ export FIREWORKS_API_KEY=...           # fireworks/* models
 - Paste image for vision models
 - MCP
 - Skills
+- Subagents
 - AGENTS.md
 - Mouse support (scroll, select to copy)
 - Slash commands
@@ -103,6 +104,7 @@ Model catalog environment variables:
 | `/undo` | Rewind to before the last user message |
 | `/skills` | List available skills |
 | `/skill:<name>` | Run a skill |
+| `/agents` | List available subagents |
 | `/mcp` | List connected MCP servers and tools |
 | `/mcps` | Enable or disable MCP servers (Ctrl+E) |
 
@@ -155,6 +157,44 @@ To display estimated costs in a specific currency, configure a USD conversion ra
 ```
 
 If `fractionDigits` is omitted, Pace uses dynamic precision similar to the default USD display.
+
+## Subagents
+
+Subagents are specialized helpers that run in their own isolated context window. The main agent delegates tasks to them with the `agent` tool. Each subagent returns only its final result, so exploration and tool noise stay out of the main conversation.
+
+Pace ships with one built-in agent:
+
+- `explore` — fast, read-only codebase exploration
+
+Define your own agents as Markdown files with YAML frontmatter:
+
+- Project: `.agents/agents/<name>.md`
+- Global: `~/.agents/agents/<name>.md`
+
+```markdown
+---
+name: reviewer
+description: Reviews code changes for bugs, security issues, and missing tests
+tools: read, bash
+---
+You are a code reviewer. Analyze the given changes and report:
+- Bugs and edge cases
+- Security concerns
+- Missing tests
+
+Do not modify any files.
+```
+
+Frontmatter fields:
+
+| Field | Description |
+|---|---|
+| `name` | Must match the file name |
+| `description` | Tells the main agent when to delegate. Be specific about trigger conditions |
+| `tools` | Comma-separated allowlist. Omit for all tools |
+| `model` | Optional model id, e.g. `opencode/claude-haiku-4-5`. Defaults to the current model |
+
+Subagents cannot spawn subagents. Use `/agents` to list available agents.
 
 ## MCP servers
 
