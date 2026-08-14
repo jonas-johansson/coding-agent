@@ -435,6 +435,18 @@ export const MODEL_METADATA: Record<string, ModelMetadata> = {
       outputPerMTok: 4.40,
     },
   },
+  "opencode/glm-5.3": {
+    contextWindow: 1_000_000,
+    maxOutputTokens: 131_072,
+    supportsImages: false,
+    variants: GLM_5_2_REASONING_VARIANTS,
+    pricing: {
+      inputPerMTok: 1.40,
+      cacheWritePerMTok: 0,
+      cacheReadPerMTok: 0.26,
+      outputPerMTok: 4.40,
+    },
+  },
   "fireworks/kimi-k2.6": {
     contextWindow: 262_144,
     maxOutputTokens: 32_000,
