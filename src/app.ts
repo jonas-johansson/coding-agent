@@ -167,6 +167,23 @@ let openAIProvider: Provider | undefined;
 let fireworksProvider: Provider | undefined;
 let lmStudioProvider: Provider | undefined;
 
+async function getOpenCodeGoProvider(): Promise<Provider> {
+  if (!openCodeGoProvider) {
+    const apiKey = process.env.OPENCODE_GO_API_KEY ?? process.env.OPENCODE_ZEN_API_KEY ?? process.env.OPENCODE_API_KEY;
+    if (!apiKey) {
+      throw new Error(
+        "Missing API key for OpenCode Go. Set the OPENCODE_GO_API_KEY, OPENCODE_ZEN_API_KEY, or OPENCODE_API_KEY environment variable.",
+      );
+    }
+    const { OpenCodeZenProvider } = await import("./providers/opencode-zen");
+    openCodeGoProvider = new OpenCodeZenProvider({
+      apiKey,
+      baseUrl: process.env.OPENCODE_GO_BASE_URL ?? "https://opencode.ai/zen/go/v1",
+    });
+  }
+  return openCodeGoProvider;
+}
+
 async function getProvider(config: ModelConfig): Promise<Provider> {
   switch (config.provider) {
     case "anthropic": {
@@ -222,38 +239,17 @@ async function getProvider(config: ModelConfig): Promise<Provider> {
         // and requires explicit workspace opt-in, so it is only used when Go
         // is explicitly configured via OPENCODE_GO_API_KEY or
         // OPENCODE_GO_BASE_URL. Free variants always use the Zen endpoint.
-        if (!openCodeGoProvider) {
-          const apiKey = process.env.OPENCODE_GO_API_KEY ?? process.env.OPENCODE_ZEN_API_KEY ?? process.env.OPENCODE_API_KEY;
-          if (!apiKey) {
-            throw new Error(
-              "Missing API key for OpenCode Go. Set the OPENCODE_GO_API_KEY, OPENCODE_ZEN_API_KEY, or OPENCODE_API_KEY environment variable.",
-            );
-          }
-          const { OpenCodeZenProvider } = await import("./providers/opencode-zen");
-          openCodeGoProvider = new OpenCodeZenProvider({
-            apiKey,
-            baseUrl: process.env.OPENCODE_GO_BASE_URL ?? "https://opencode.ai/zen/go/v1",
-          });
-        }
-        return openCodeGoProvider;
+        return getOpenCodeGoProvider();
       }
       if (config.providerModel === "kimi-k3") {
         // Kimi K3 is served by the OpenCode Go Chat Completions endpoint,
         // not the regular Zen endpoint.
-        if (!openCodeGoProvider) {
-          const apiKey = process.env.OPENCODE_GO_API_KEY ?? process.env.OPENCODE_ZEN_API_KEY ?? process.env.OPENCODE_API_KEY;
-          if (!apiKey) {
-            throw new Error(
-              "Missing API key for OpenCode Go. Set the OPENCODE_GO_API_KEY, OPENCODE_ZEN_API_KEY, or OPENCODE_API_KEY environment variable.",
-            );
-          }
-          const { OpenCodeZenProvider } = await import("./providers/opencode-zen");
-          openCodeGoProvider = new OpenCodeZenProvider({
-            apiKey,
-            baseUrl: process.env.OPENCODE_GO_BASE_URL ?? "https://opencode.ai/zen/go/v1",
-          });
-        }
-        return openCodeGoProvider;
+        return getOpenCodeGoProvider();
+      }
+      if (config.providerModel === "glm-5.3") {
+        // GLM-5.3 is served by the OpenCode Go Chat Completions endpoint,
+        // not the regular Zen endpoint.
+        return getOpenCodeGoProvider();
       }
       if (!openCodeZenProvider) {
         const { OpenCodeZenProvider } = await import("./providers/opencode-zen");
