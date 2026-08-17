@@ -22,6 +22,10 @@ export type SyntaxTheme = {
   operator: number;
   punctuation: number;
   property: number;
+  /** Unified-diff added lines (`+`). */
+  diffAdd: number;
+  /** Unified-diff removed lines (`-`). */
+  diffRemove: number;
 };
 
 export type TuiTheme = {
@@ -71,6 +75,8 @@ export const BUILT_IN_THEMES: Record<string, TuiTheme> = {
       operator: 186,
       punctuation: 250,
       property: 187,
+      diffAdd: 151,
+      diffRemove: 217,
     },
     canvas: { bg: 234, panelBg: 235 },
     overlay: { bg: 235, chromeBg: 237, selBg: 238, fg: 245, dimFg: 244, brightFg: 252 },
@@ -110,6 +116,8 @@ export const BUILT_IN_THEMES: Record<string, TuiTheme> = {
       operator: 66,
       punctuation: 235,
       property: 167,
+      diffAdd: 65,
+      diffRemove: 167,
     },
     canvas: { bg: 231, panelBg: 255 },
     overlay: { bg: 255, chromeBg: 252, selBg: 253, fg: 235, dimFg: 245, brightFg: 235 },

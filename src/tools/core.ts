@@ -22,6 +22,12 @@ export type ToolOutput = {
    * should report their cost here.
    */
   cost?: number;
+  /**
+   * Optional user-facing body for the TUI. When set, the live tool block
+   * and session replay show this string instead of `content`. The model
+   * still receives `content` only.
+   */
+  display?: string;
 }
 
 export type ToolDisplayBlock = {

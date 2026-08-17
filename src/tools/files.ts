@@ -2,6 +2,7 @@ import { mkdir, readFile, stat, writeFile } from "fs/promises";
 import { dirname, extname } from "path";
 import { z } from "zod";
 import { defineTool, throwIfAborted, type ToolOutput } from "./core";
+import { formatReplacementDiff, wrapDiffFence } from "./diff";
 import { checkFileState, recordFileState } from "./file-state";
 import { expandHomePath, normalizePath } from "./path";
 
@@ -207,11 +208,18 @@ export const editTool = defineTool({
     }
 
     const oldFileData = fileBytes.toString("utf8");
+    const diff = formatReplacementDiff({
+      fileText: oldFileData,
+      oldText: input.oldText,
+      newText: input.newText,
+    });
     const newFileData = oldFileData.replaceAll(input.oldText, input.newText);
     await writeFile(filePath, newFileData);
     recordFileState(filePath, newFileData);
+    const replacementLabel = diff.replacements === 1 ? "1 replacement" : `${diff.replacements} replacements`;
     return {
-      content: [{ type: "text", text: `Edited file` }]
+      content: [{ type: "text", text: `Edited file (${replacementLabel})` }],
+      display: wrapDiffFence(diff.text),
     }
   }
 })

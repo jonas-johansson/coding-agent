@@ -61,6 +61,11 @@ export type ToolResultEntry = BaseEntry & {
   isError?: boolean;
   /** Optional cost incurred by the tool call (e.g. subagent model usage). */
   cost?: number;
+  /**
+   * Optional user-facing body. Shown in the TUI instead of `content` when
+   * present. Never sent to the model.
+   */
+  display?: string;
 };
 
 export type SessionEntry = UserEntry | AssistantEntry | ToolResultEntry;
@@ -261,6 +266,7 @@ export function createToolResultEntry(params: CreateToolResultEntryParams): Tool
     content: params.content,
     ...(params.isError && { isError: true }),
     ...(params.cost !== undefined && { cost: params.cost }),
+    ...(params.display !== undefined && { display: params.display }),
   };
 }
 
@@ -636,6 +642,7 @@ function isSessionEntry(value: unknown): value is SessionEntry {
         && value.content.every(isToolResultPart)
         && isOptionalBoolean(value.isError)
         && isOptionalNumber(value.cost)
+        && isOptionalString(value.display)
       );
     default:
       return false;

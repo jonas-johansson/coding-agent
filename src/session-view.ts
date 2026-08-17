@@ -250,9 +250,9 @@ function toolUseToRenderBlock(
   results: readonly ToolResultEntry[],
 ): SessionRenderBlock {
   const isError = results.some((result) => result.isError);
-  const content = shouldShowToolResultContent(toolName, isError)
-    ? formatToolResultEntries(results)
-    : "";
+  const display = formatToolResultDisplay(results);
+  const content = display
+    || (shouldShowToolResultContent(toolName, isError) ? formatToolResultEntries(results) : "");
 
   return {
     key: `tool:${toolUseId}`,
@@ -288,6 +288,10 @@ function formatUserContentBlock(block: UserEntry["content"][number]): string {
   }
 
   return formatImageBlock(block);
+}
+
+function formatToolResultDisplay(entries: readonly ToolResultEntry[]): string {
+  return entries.map((entry) => entry.display).filter(Boolean).join("\n\n");
 }
 
 function formatToolResultEntries(entries: readonly ToolResultEntry[]): string {

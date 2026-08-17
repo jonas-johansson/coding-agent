@@ -19,8 +19,10 @@
  *   "sh-function"   — hand-rolled: function calls
  *   "sh-operator"   — hand-rolled: operators
  *   "sh-punctuation"— hand-rolled: brackets, commas, colons
- *   "sh-property"   — hand-rolled: object keys / CSS properties
- *   "code"          — plain (unrecognised) token
+ *   "sh-property"    — hand-rolled: object keys / CSS properties
+ *   "sh-diff-add"    — hand-rolled: unified-diff added lines
+ *   "sh-diff-remove" — hand-rolled: unified-diff removed lines
+ *   "code"           — plain (unrecognised) token
  */
 
 import type { HighlighterCore, ThemedToken, ThemeRegistrationAny, LanguageRegistration } from "shiki/core";
@@ -40,7 +42,9 @@ type SyntaxStyle =
   | "sh-function"
   | "sh-operator"
   | "sh-punctuation"
-  | "sh-property";
+  | "sh-property"
+  | "sh-diff-add"
+  | "sh-diff-remove";
 
 export type SyntaxSegment = {
   text: string;
@@ -547,6 +551,13 @@ const dockerfileRules: TokenRule[] = [
   { pattern: /(?:&&|\|\||[|&;<>])/g, style: "sh-operator" },
 ];
 
+// Unified diff. Whole-line colors so +/- prefixes stay obvious.
+const diffRules: TokenRule[] = [
+  { pattern: /^-.*$/g, style: "sh-diff-remove" },
+  { pattern: /^\+.*$/g, style: "sh-diff-add" },
+  { pattern: /^@@.*$/g, style: "sh-comment" },
+];
+
 // ---------------------------------------------------------------------------
 // Language alias map (hand-rolled)
 // ---------------------------------------------------------------------------
@@ -567,6 +578,7 @@ const langRules: Record<string, TokenRule[]> = {
   c: cRules, h: cRules,
   cc: cppRules, cpp: cppRules, cxx: cppRules, cplusplus: cppRules, "c++": cppRules, hpp: cppRules, hxx: cppRules,
   docker: dockerfileRules, dockerfile: dockerfileRules,
+  diff: diffRules,
 };
 
 // ---------------------------------------------------------------------------

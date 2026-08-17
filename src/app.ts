@@ -1640,6 +1640,7 @@ function makeToolErrorResult(toolUseId: string, text: string): ToolResultContent
 type ExecutedTool = {
   result: ToolResultContent;
   cost?: number;
+  display?: string;
 };
 
 async function executeToolUseBlock(
@@ -1700,8 +1701,10 @@ async function executeToolUseBlock(
       : await truncateToolOutputIfNeeded(rawToolOutput, contentBlock.name, contentBlock.id);
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");
     const showContent = toolToExecute.showContent !== false || toolOutput.is_error;
+    const displayContent = toolOutput.display
+      ?? (showContent ? formatToolResultBody(toolOutput) : "");
     tui.updateBlock(blockId, {
-      content: showContent ? formatToolResultBody(toolOutput) : "",
+      content: displayContent,
       state: toolOutput.is_error ? "error" : "done",
     });
 
@@ -1724,6 +1727,7 @@ async function executeToolUseBlock(
         ...(toolOutput.is_error && { is_error: true }),
       },
       ...(toolOutput.cost !== undefined && { cost: toolOutput.cost }),
+      ...(toolOutput.display !== undefined && { display: toolOutput.display }),
     };
   } catch (error: unknown) {
     if (isAbortError(error)) throw error;
@@ -1913,6 +1917,7 @@ async function prompt(
       content: executed.result.content,
       ...(executed.result.is_error && { isError: true }),
       ...(executed.cost !== undefined && { cost: executed.cost }),
+      ...(executed.display !== undefined && { display: executed.display }),
     }));
   };
 
