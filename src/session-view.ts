@@ -70,7 +70,10 @@ export type TurnSummary = {
   modelVariant?: string;
   cost: number;
   durationMs: number;
+  /** Input tokens of the final assistant call, i.e. the context size at the end of the turn. */
   tokensIn: number;
+  /** Sum of input tokens across all assistant calls in the turn. Used for the cache ratio. */
+  totalTokensIn: number;
   tokensOut: number;
   cacheReadTokens: number;
   /** Average output tokens per second across streaming time only. */
@@ -80,9 +83,11 @@ export type TurnSummary = {
 /**
  * Compute the usage summary for the turn that ends with the last entry of the
  * given list. Returns undefined when the list does not end with an assistant
- * entry (aborted or mid-turn path). Totals span all assistant calls in the
- * turn; duration is derived from the user entry and final assistant entry
- * timestamps, so it includes tool execution time.
+ * entry (aborted or mid-turn path). `tokensIn` is the input token count of the
+ * final assistant call, i.e. the context size at the end of the turn. Output,
+ * cache, and cost totals span all assistant calls in the turn. Duration is
+ * derived from the user entry and final assistant entry timestamps, so it
+ * includes tool execution time.
  */
 export function getTurnSummary(entries: readonly SessionEntry[]): TurnSummary | undefined {
   const lastEntry = entries[entries.length - 1];
@@ -98,26 +103,30 @@ export function getTurnSummary(entries: readonly SessionEntry[]): TurnSummary | 
     }
   }
 
-  let tokensIn = 0;
+  let totalTokensIn = 0;
   let tokensOut = 0;
   let cacheReadTokens = 0;
   let cost = 0;
   let streamDurationMs = 0;
   let modelId = "";
   let modelVariant: string | undefined;
+  let tokensIn = 0;
 
   for (let i = turnStartIndex; i < entries.length; i += 1) {
     const entry = entries[i];
     if (entry.type !== "assistant") {
       continue;
     }
-    tokensIn += entry.tokensIn;
+    totalTokensIn += entry.tokensIn;
     tokensOut += entry.tokensOut;
     cacheReadTokens += entry.cacheReadTokens ?? 0;
     cost += entry.cost;
     streamDurationMs += entry.streamDurationMs ?? 0;
     modelId = entry.modelId;
     modelVariant = entry.modelVariant;
+    // The final assistant call re-sends the whole context, so its input
+    // token count is the context size at the end of the turn.
+    tokensIn = entry.tokensIn;
   }
 
   const turnStart = entries[turnStartIndex];
@@ -127,7 +136,7 @@ export function getTurnSummary(entries: readonly SessionEntry[]): TurnSummary | 
 
   const tps = streamDurationMs > 0 ? tokensOut / (streamDurationMs / 1000) : undefined;
 
-  return { modelId, modelVariant, cost, durationMs, tokensIn, tokensOut, cacheReadTokens, tps };
+  return { modelId, modelVariant, cost, durationMs, tokensIn, totalTokensIn, tokensOut, cacheReadTokens, tps };
 }
 
 export function formatTurnSummary(summary: TurnSummary, costConfig: CostDisplayConfig): string {
@@ -148,8 +157,8 @@ export function formatTurnSummary(summary: TurnSummary, costConfig: CostDisplayC
   parts.push(`${formatTokenCount(summary.tokensIn)} in`);
   parts.push(`${formatTokenCount(summary.tokensOut)} out`);
 
-  if (summary.tokensIn > 0) {
-    const cachePercent = Math.round((summary.cacheReadTokens / summary.tokensIn) * 100);
+  if (summary.totalTokensIn > 0) {
+    const cachePercent = Math.round((summary.cacheReadTokens / summary.totalTokensIn) * 100);
     parts.push(`cache ${cachePercent}%`);
   }
 
