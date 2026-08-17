@@ -3753,7 +3753,7 @@ function renderInlineToolBlock(block: RenderBlock, columns: number, spinnerFrame
 function renderPanelToolBlock(block: RenderBlock, columns: number, spinnerFrame: string, sanitizedContent: string) {
   const theme = currentTheme.blocks.tool;
   const content = sanitizedContent.trimStart().replace(/\n+$/, "");
-  const indicator = renderStateIndicator(block.state, content, spinnerFrame, theme);
+  const indicator = renderStateIndicator(block.state, spinnerFrame, theme);
   // Indicator text is a single plain character (no ANSI).
   const indicatorWidth = indicator ? displayWidth(indicator.text) : 0;
   const titleInnerWidth = Math.max(1, columns - 4 - (indicatorWidth > 0 ? indicatorWidth + 1 : 0));
@@ -3829,7 +3829,6 @@ function truncateToWidth(text: string, maxWidth: number): string {
 
 function renderStateIndicator(
   state: BlockState | undefined,
-  content: string,
   spinnerFrame: string,
   theme: BlockTheme,
 ): { text: string; rendered: string } | undefined {
@@ -3851,15 +3850,11 @@ function renderStateIndicator(
     };
   }
 
-  // state === "done": show a checkmark only when there is no body to render
-  if (!content) {
-    return {
-      text: currentTheme.glyphs.done.glyph,
-      rendered: `${RESET}${bg(theme.bg)}${fg(currentTheme.glyphs.done.color)}${BOLD}${currentTheme.glyphs.done.glyph}`,
-    };
-  }
-
-  return undefined;
+  // state === "done"
+  return {
+    text: currentTheme.glyphs.done.glyph,
+    rendered: `${RESET}${bg(theme.bg)}${fg(currentTheme.glyphs.done.color)}${BOLD}${currentTheme.glyphs.done.glyph}`,
+  };
 }
 
 /** State indicator for inline tool lines (rendered on the black canvas). */
