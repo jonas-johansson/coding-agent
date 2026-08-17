@@ -136,7 +136,8 @@ type SegmentStyle =
   | "sh-punctuation"
   | "sh-property"
   | "sh-diff-add"
-  | "sh-diff-remove";
+  | "sh-diff-remove"
+  | "sh-diff-context";
 
 type ScreenPosition = {
   row: number;
@@ -3942,6 +3943,8 @@ function syntaxColorFor(style: SegmentStyle): number | undefined {
       return syntax.diffAdd;
     case "sh-diff-remove":
       return syntax.diffRemove;
+    case "sh-diff-context":
+      return syntax.comment;
     default:
       return undefined;
   }

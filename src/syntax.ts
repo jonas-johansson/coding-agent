@@ -20,9 +20,10 @@
  *   "sh-operator"   — hand-rolled: operators
  *   "sh-punctuation"— hand-rolled: brackets, commas, colons
  *   "sh-property"    — hand-rolled: object keys / CSS properties
- *   "sh-diff-add"    — hand-rolled: unified-diff added lines
- *   "sh-diff-remove" — hand-rolled: unified-diff removed lines
- *   "code"           — plain (unrecognised) token
+ *   "sh-diff-add"     — hand-rolled: unified-diff added lines
+ *   "sh-diff-remove"  — hand-rolled: unified-diff removed lines
+ *   "sh-diff-context" — hand-rolled: unified-diff context lines
+ *   "code"            — plain (unrecognised) token
  */
 
 import type { HighlighterCore, ThemedToken, ThemeRegistrationAny, LanguageRegistration } from "shiki/core";
@@ -44,7 +45,8 @@ type SyntaxStyle =
   | "sh-punctuation"
   | "sh-property"
   | "sh-diff-add"
-  | "sh-diff-remove";
+  | "sh-diff-remove"
+  | "sh-diff-context";
 
 export type SyntaxSegment = {
   text: string;
@@ -556,6 +558,7 @@ const diffRules: TokenRule[] = [
   { pattern: /^-.*$/g, style: "sh-diff-remove" },
   { pattern: /^\+.*$/g, style: "sh-diff-add" },
   { pattern: /^@@.*$/g, style: "sh-comment" },
+  { pattern: /^ .*$/g, style: "sh-diff-context" },
 ];
 
 // ---------------------------------------------------------------------------
@@ -590,6 +593,12 @@ const langRules: Record<string, TokenRule[]> = {
  * tokenizer.  Returns one `SyntaxSegment[]` per input line.
  */
 export function tokenizeCode(lines: string[], language: string | null): SyntaxSegment[][] {
+  // Diff hunks use our own +/- colors. Do not let Shiki paint the whole
+  // block as source code (its default string/code color is also green).
+  if (language && language.toLowerCase() === "diff") {
+    return tokenizeWithRules(lines, language);
+  }
+
   try {
     if (shiki && language) {
       const resolved = resolveShikiLang(language);
