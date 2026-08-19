@@ -164,8 +164,29 @@ function toVariants(variants: Record<string, Record<string, unknown>> | undefine
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
-function reasoningEffortVariant(providerId: ProviderId, effort: string): ModelVariant {
-  if (providerId === "anthropic") {
+/**
+ * The payload style for reasoning variants must match the API that serves the
+ * model, which is not always implied by the provider id. OpenCode Zen serves
+ * claude-* models via the Anthropic Messages API and gpt-* models via the
+ * OpenAI Responses API (see getProvider in app.ts). Sending the generic
+ * `thinking: { type: "enabled" }` shape to a Claude model fails upstream
+ * because the Anthropic API requires `budget_tokens` (min 1024) for that
+ * thinking type.
+ */
+type ReasoningApiStyle = "anthropic" | "openai" | "generic";
+
+function reasoningApiStyle(providerId: ProviderId, providerModelId: string): ReasoningApiStyle {
+  if (providerId === "anthropic") return "anthropic";
+  if (providerId === "openai") return "openai";
+  if (providerId === "opencode") {
+    if (providerModelId.startsWith("claude-")) return "anthropic";
+    if (providerModelId.startsWith("gpt-")) return "openai";
+  }
+  return "generic";
+}
+
+function reasoningEffortVariant(style: ReasoningApiStyle, effort: string): ModelVariant {
+  if (style === "anthropic") {
     return {
       id: effort,
       label: `adaptive thinking effort: ${effort}`,
@@ -176,7 +197,7 @@ function reasoningEffortVariant(providerId: ProviderId, effort: string): ModelVa
     };
   }
 
-  if (providerId === "openai") {
+  if (style === "openai") {
     return {
       id: effort,
       label: `reasoning effort: ${effort}`,
@@ -197,8 +218,8 @@ function reasoningEffortVariant(providerId: ProviderId, effort: string): ModelVa
   };
 }
 
-function reasoningToggleVariants(providerId: ProviderId): Record<string, ModelVariant> {
-  if (providerId === "anthropic") {
+function reasoningToggleVariants(style: ReasoningApiStyle): Record<string, ModelVariant> {
+  if (style === "anthropic") {
     return {
       nothink: {
         id: "nothink",
@@ -229,17 +250,19 @@ function reasoningToggleVariants(providerId: ProviderId): Record<string, ModelVa
 
 function toReasoningVariants(
   providerId: ProviderId,
+  providerModelId: string,
   model: ModelsDevCatalog[string]["models"][string],
 ): Record<string, ModelVariant> | undefined {
   if (model.reasoning !== true) return undefined;
 
+  const style = reasoningApiStyle(providerId, providerModelId);
   const variants: Record<string, ModelVariant> = {};
   for (const option of model.reasoning_options ?? []) {
     if (option.type === "toggle") {
-      Object.assign(variants, reasoningToggleVariants(providerId));
+      Object.assign(variants, reasoningToggleVariants(style));
     } else if (option.type === "effort") {
       for (const effort of (option.values ?? []).filter((value): value is string => typeof value === "string")) {
-        variants[effort] = reasoningEffortVariant(providerId, effort);
+        variants[effort] = reasoningEffortVariant(style, effort);
       }
     }
   }
@@ -272,7 +295,7 @@ function toRemoteMetadata(catalog: ModelsDevCatalog): Record<string, ModelMetada
         ? model.options
         : undefined;
       const variants = {
-        ...(toReasoningVariants(providerId, model) ?? {}),
+        ...(toReasoningVariants(providerId, providerModelId, model) ?? {}),
         ...(toVariants(model.variants) ?? {}),
       };
       const longContextPricing = model.cost?.context_over_200k
