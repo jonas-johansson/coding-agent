@@ -36,6 +36,8 @@ export type BaseEntry = {
 export type UserEntry = BaseEntry & {
   type: "user";
   content: (TextBlock | ImageBlock)[];
+  /** True when the user sent this message mid-turn to steer the agent. */
+  steering?: boolean;
 };
 
 export type AssistantEntry = BaseEntry & {
@@ -108,7 +110,7 @@ export type TurnDraft = {
 
 type NewEntryFields = Partial<Pick<BaseEntry, "id" | "timestamp">>;
 
-export type CreateUserEntryParams = NewEntryFields & Pick<UserEntry, "content">;
+export type CreateUserEntryParams = NewEntryFields & Pick<UserEntry, "content" | "steering">;
 
 export type CreateAssistantEntryParams = NewEntryFields &
   Omit<AssistantEntry, keyof BaseEntry | "type">;
@@ -237,6 +239,7 @@ export function createUserEntry(params: CreateUserEntryParams): UserEntry {
     ...createBaseEntry(params),
     type: "user",
     content: params.content,
+    ...(params.steering && { steering: true }),
   };
 }
 

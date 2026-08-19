@@ -283,6 +283,7 @@ export class Tui {
   private screenLinesDirty = true;
 
   private imageCount = 0;
+  private steeringQueueCount = 0;
   private focused = true;
   private exitConfirmPresses = 0;
   private collapseOverrides = new Map<string, boolean>();
@@ -330,7 +331,7 @@ export class Tui {
   private treeOverlayItems: TreeOverlayItem[] = [];
   private treeOverlayExpanded = new Set<string>();
 
-  constructor(private readonly options: { onSubmit?: SubmitHandler; onTab?: () => void; onShiftTab?: () => void; onCycleVariant?: () => void; onEscape?: () => void; onExit?: () => void | Promise<void>; onPasteImage?: () => void | Promise<void>; slashCommands?: SuggestionProvider; fileSuggestions?: FileSuggestionProvider; modelOverlay?: ModelOverlayOptions; mcpOverlay?: McpOverlayOptions; sessionOverlay?: SessionOverlayOptions; treeOverlay?: TreeOverlayOptions; model?: string; cwd?: string; gitBranch?: string } = {}) {
+  constructor(private readonly options: { onSubmit?: SubmitHandler; onSteer?: (text: string) => void; onTab?: () => void; onShiftTab?: () => void; onCycleVariant?: () => void; onEscape?: () => void; onExit?: () => void | Promise<void>; onPasteImage?: () => void | Promise<void>; slashCommands?: SuggestionProvider; fileSuggestions?: FileSuggestionProvider; modelOverlay?: ModelOverlayOptions; mcpOverlay?: McpOverlayOptions; sessionOverlay?: SessionOverlayOptions; treeOverlay?: TreeOverlayOptions; model?: string; cwd?: string; gitBranch?: string } = {}) {
     this.model = options.model ?? "";
     this.cwd = options.cwd ?? "";
     this.gitBranch = options.gitBranch ?? "";
@@ -519,12 +520,24 @@ export class Tui {
     this.requestRender();
   }
 
+  setSteeringQueueCount(count: number) {
+    this.steeringQueueCount = count;
+    this.requestRender();
+  }
+
   setInput(text: string) {
     this.input = text;
     this.inputCursor = Array.from(text).length;
     this.inputScrollRow = 0;
     this.deactivateHistory();
     this.requestRender();
+  }
+
+  prependInput(text: string) {
+    if (!text) {
+      return;
+    }
+    this.setInput(this.input ? `${text}\n${this.input}` : text);
   }
 
   get isFocused(): boolean {
@@ -2487,8 +2500,18 @@ export class Tui {
     }
 
     if (this.running) {
-      this.status = "agent is still running";
+      if (!this.options.onSteer) {
+        this.status = "agent is still running";
+        this.requestRender();
+        return;
+      }
+
+      this.inputHistory.push(submitted);
+      this.clearInput();
+      this.scrollOffset = 0;
+      this.clearSelection();
       this.requestRender();
+      this.options.onSteer(submitted);
       return;
     }
 
@@ -2892,8 +2915,9 @@ export class Tui {
     const spinner = this.running ? `${SPINNER_FRAMES[this.spinnerFrame]} ` : "";
     const statusText = !this.running && (!this.status || this.status === "idle") ? "" : this.status || "idle";
     const imageText = this.imageCount > 0 ? `${statusText ? " | " : ""}📎 ${this.imageCount} image${this.imageCount === 1 ? "" : "s"}` : "";
-    const scrollText = this.scrollOffset > 0 ? `${statusText || imageText ? " | " : ""}scroll ${this.scrollOffset}/${maxScroll} | End latest` : "";
-    const leftText = `${spinner}${statusText}${imageText}${scrollText}`;
+    const steerText = this.steeringQueueCount > 0 ? `${statusText || imageText ? " | " : ""}${this.steeringQueueCount} steering queued` : "";
+    const scrollText = this.scrollOffset > 0 ? `${statusText || imageText || steerText ? " | " : ""}scroll ${this.scrollOffset}/${maxScroll} | End latest` : "";
+    const leftText = `${spinner}${statusText}${imageText}${steerText}${scrollText}`;
     const costText = this.cost > 0 ? `  ${formatCost(this.cost, this.costDisplayConfig)}  ` : "";
     const contextText = this.contextInfo ? `  ${formatContextInfo(this.contextInfo)}  ` : "";
     const modelText = this.model ? `  ${this.model}  ` : "";

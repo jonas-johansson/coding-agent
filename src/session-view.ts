@@ -97,7 +97,10 @@ export function getTurnSummary(entries: readonly SessionEntry[]): TurnSummary | 
 
   let turnStartIndex = 0;
   for (let i = entries.length - 2; i >= 0; i -= 1) {
-    if (entries[i].type === "user") {
+    const entry = entries[i];
+    // Steering messages are injected mid-turn, so the turn starts at the
+    // last non-steering user entry.
+    if (entry.type === "user" && !entry.steering) {
       turnStartIndex = i;
       break;
     }

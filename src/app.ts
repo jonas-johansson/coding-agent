@@ -366,11 +366,28 @@ function selectModelSelection(selection: ModelSelection) {
 
 function cancelPrompt() {
   if (!promptRunning || !currentAbortController) return;
+  // Restore queued steering messages to the input line so they are not lost.
+  if (steeringQueue.length > 0) {
+    tui.prependInput(steeringQueue.splice(0).join("\n"));
+    tui.setSteeringQueueCount(0);
+  }
   currentAbortController.abort();
+}
+
+function queueSteeringMessage(text: string) {
+  if (text.startsWith("/") || text.startsWith("!")) {
+    tui.setStatus("Commands are not available while the agent is running");
+    return;
+  }
+
+  steeringQueue.push(text);
+  tui.setSteeringQueueCount(steeringQueue.length);
+  tui.setStatus("Steering queued — delivered after the current step");
 }
 
 const tui = new Tui({
   onSubmit: handleUserInput,
+  onSteer: queueSteeringMessage,
   onTab: cycleModel,
   onShiftTab: cycleModelReverse,
   onCycleVariant: cycleModelVariant,
@@ -466,6 +483,7 @@ let costDisplayConfig: CostDisplayConfig = DEFAULT_COST_DISPLAY_CONFIG;
 
 let promptRunning = false;
 let currentAbortController: AbortController | null = null;
+const steeringQueue: string[] = [];
 let lastInputTokens = 0;
 let lastOutputTokens = 0;
 let lastCacheReadTokens = 0;
@@ -1859,7 +1877,15 @@ async function handleUserInput(userMessage: string) {
   } finally {
     promptRunning = false;
     tui.setRunning(false, "idle");
-    if (!tui.isFocused) {
+    const nextSteering = steeringQueue.shift();
+    tui.setSteeringQueueCount(steeringQueue.length);
+    if (nextSteering !== undefined) {
+      // The turn ended before this steering message could be delivered.
+      // Run it as a new prompt instead.
+      handleUserInput(nextSteering).catch((error: unknown) => {
+        tui.addBlock({ role: "error", title: "Error", content: formatError(error) });
+      });
+    } else if (!tui.isFocused) {
       sendDoneNotification(activeSession);
     }
   }
@@ -2013,6 +2039,21 @@ async function prompt(
 
   try {
     while (true) {
+      // Deliver queued steering messages at this loop boundary. Each becomes
+      // a user entry in the current turn, so the next provider request
+      // includes it.
+      const steeringMessages = steeringQueue.splice(0);
+      if (steeringMessages.length > 0) {
+        for (const steeringText of steeringMessages) {
+          appendTurnDraftEntry(turnDraft, createUserEntry({
+            content: [{ type: "text", text: steeringText }],
+            steering: true,
+          }));
+          tui.addBlock({ role: "user", content: steeringText });
+        }
+        tui.setSteeringQueueCount(0);
+      }
+
       tui.setStatus("Thinking");
 
       const imageCap = capProviderMessageImages(
