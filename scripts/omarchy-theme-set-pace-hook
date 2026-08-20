@@ -2,27 +2,7 @@
 # ~/.config/omarchy/hooks/theme-set.d/pace-theme
 # omarchy:summary=Synchronize Omarchy theme changes with Pace.
 
-THEME_NAME=$1
-
-# Map Omarchy theme names to Pace theme names
-# (optional — if Pace has matching custom themes)
-case "$THEME_NAME" in
-  catppuccin|catppuccin-latte) PACE_THEME="catppuccin" ;;
-  tokyo-night) PACE_THEME="tokyonight" ;;
-  everforest) PACE_THEME="everforest" ;;
-  *) PACE_THEME="system" ;;
-esac
-
-# Update Pace config
-mkdir -p ~/.config/pace
-if [[ -f ~/.config/pace/config.json ]]; then
-  jq --arg theme "$PACE_THEME" '.theme = {name: $theme}' ~/.config/pace/config.json > ~/.config/pace/config.json.tmp
-  mv ~/.config/pace/config.json.tmp ~/.config/pace/config.json
-else
-  echo '{"theme":{"name":"'$PACE_THEME'"}}' > ~/.config/pace/config.json
-fi
-
-# Signal running Pace instances
+# Pace reads the active Omarchy colors.toml when it receives SIGUSR2.
 if pgrep -x pace >/dev/null; then
   killall -SIGUSR2 pace
 fi

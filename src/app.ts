@@ -88,7 +88,7 @@ import { readClipboardImage, type SupportedImageMediaType } from "./clipboard";
 import { sendDesktopNotification } from "./notify";
 import { onEvent } from "./events";
 import { loadPaceConfig, DEFAULT_COST_DISPLAY_CONFIG, type CostDisplayConfig } from "./config";
-import { BUILT_IN_THEMES, resolveTheme } from "./themes";
+import { resolveTheme } from "./themes";
 import { setTuiTheme } from "./tui";
 import { setShikiTheme } from "./syntax";
 import { detectTerminalBackground } from "./terminal-utils";
@@ -841,13 +841,21 @@ function formatErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
-function switchTheme(themeName: string) {
+function applyTheme(themeName: string, showStatus = false) {
   const newTheme = resolveTheme(themeName);
   setTuiTheme(newTheme);
   tui.invalidateRenderCache();
   // Fire-and-forget: Shiki theme loading is non-critical for TUI rendering.
   void setShikiTheme(newTheme.shikiTheme);
-  tui.setStatus(`Theme: ${newTheme.name}`);
+  if (showStatus) tui.setStatus(`Theme: ${newTheme.name}`);
+}
+
+function switchTheme(themeName: string) {
+  applyTheme(themeName, true);
+}
+
+function syncThemeFromTerminal() {
+  applyTheme(detectTerminalBackground());
 }
 
 const SESSION_TITLE_SYSTEM_PROMPT = `Generate a short, descriptive session title for a coding assistant conversation.
@@ -2387,10 +2395,7 @@ async function main() {
     costDisplayConfig = paceConfig.cost;
     tui.setCostDisplayConfig(paceConfig.cost);
     applyConfiguredModels(paceConfig);
-    const bg = detectTerminalBackground();
-    const theme = bg === "light" ? BUILT_IN_THEMES.light : BUILT_IN_THEMES.dark;
-    setTuiTheme(theme);
-    void setShikiTheme(theme.shikiTheme);
+    syncThemeFromTerminal();
   } catch (error) {
     startupErrors.push({ title: "Pace config", content: formatError(error) });
   }
@@ -2419,9 +2424,11 @@ async function main() {
 
   tui.start();
 
-  process.on("SIGUSR2", async () => {
-    // Reload config on SIGHUP/USR2 (no theme reload — theme is session-only).
+  process.on("SIGUSR2", () => {
+    syncThemeFromTerminal();
   });
+  // Omarchy hooks target running Pace instances with `SIGUSR2`.
+  process.title = "pace";
 
   for (const { title, content } of startupErrors) {
     tui.addBlock({ role: "error", title, content });

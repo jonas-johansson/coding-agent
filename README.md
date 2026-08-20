@@ -158,6 +158,19 @@ To display estimated costs in a specific currency, configure a USD conversion ra
 
 If `fractionDigits` is omitted, Pace uses dynamic precision similar to the default USD display.
 
+## Omarchy theme synchronization
+
+Pace detects the active Omarchy theme background and uses its built-in dark or light theme. To update a running Pace session when Omarchy changes theme, install the included hook once from the Pace repository:
+
+```sh
+install -Dm755 scripts/omarchy-theme-set-pace-hook \
+  "$HOME/.config/omarchy/hooks/theme-set.d/pace-theme"
+```
+
+The hook sends Pace `SIGUSR2` after Omarchy changes its theme. Pace then reads `~/.config/omarchy/current/theme/colors.toml` and updates without a restart. The hook does not modify Pace configuration.
+
+Pace follows the Omarchy dark or light mode. It does not copy individual Omarchy accent colors. A manual `/theme dark` or `/theme light` selection remains active until the next Omarchy theme change.
+
 ## Subagents
 
 Subagents are specialized helpers that run in their own isolated context window. The main agent delegates tasks to them with the `agent` tool. Each subagent returns only its final result, so exploration and tool noise stay out of the main conversation.

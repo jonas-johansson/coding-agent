@@ -6,4 +6,4 @@ if [ ! -f "$PACE_DIR/dist/app.js" ] || [ -n "$(find "$PACE_DIR/src" -name '*.ts'
   (cd "$PACE_DIR" && npm run build)
 fi
 
-node "$PACE_DIR/dist/app.js" "$@"
+exec node "$PACE_DIR/dist/app.js" "$@"

@@ -1,7 +1,0 @@
-#!/bin/bash
-# ~/.local/bin/omarchy-restart-pace
-# omarchy:summary=Reload Pace configuration (used by the Omarchy theme switching).
-
-if pgrep -x pace >/dev/null; then
-  killall -SIGUSR2 pace
-fi
