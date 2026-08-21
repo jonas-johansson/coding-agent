@@ -3,8 +3,11 @@ set -e
 PACE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$PACE_DIR/apps/pace/dist/app.js"
 
-if [ ! -f "$APP" ] || [ -n "$(find "$PACE_DIR/packages" "$PACE_DIR/apps" -name '*.ts' -newer "$APP" -print -quit)" ]; then
-  (cd "$PACE_DIR" && npm run build)
+if [ ! -f "$APP" ] || [ -n "$(find "$PACE_DIR/packages" "$PACE_DIR/apps" -type d \( -name dist -o -name node_modules \) -prune -o -path '*/src/*.ts' -newer "$APP" -print -quit)" ]; then
+  (cd "$PACE_DIR" && ./node_modules/.bin/tsc -b)
+  # tsc skips writing unchanged outputs, which would leave $APP older than
+  # the sources and retrigger a build on every start.
+  touch "$APP"
 fi
 
 exec node "$APP" "$@"
