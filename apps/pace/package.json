@@ -1,0 +1,20 @@
+{
+	"name": "pace",
+	"version": "0.1.0",
+	"private": true,
+	"description": "Terminal coding agent TUI.",
+	"bin": {
+		"pace": "../../bin/pace"
+	},
+	"scripts": {
+		"build": "tsc -b",
+		"lint": "tsc -b",
+		"start": "node dist/app.js"
+	},
+	"dependencies": {
+		"@pace/agent": "*",
+		"@pace/llm": "*",
+		"shiki": "^4.4.3",
+		"zod": "^4.4.3"
+	}
+}

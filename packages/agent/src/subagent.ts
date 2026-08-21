@@ -15,8 +15,8 @@ import type {
   ToolResultPart,
   ToolUseBlock,
   UsageInfo,
-} from "./provider";
-import type { ModelConfig } from "./models";
+} from "@pace/llm";
+import type { ModelConfig } from "@pace/llm";
 import {
   isAbortError,
   throwIfAborted,

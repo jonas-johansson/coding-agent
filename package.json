@@ -1,17 +1,13 @@
 {
+	"private": true,
+	"workspaces": [
+		"packages/*",
+		"apps/*"
+	],
 	"scripts": {
-		"lint": "tsc --noEmit",
-		"build": "tsc -p tsconfig.build.json",
-		"start": "node dist/app.js"
-	},
-	"dependencies": {
-		"@anthropic-ai/sdk": "^0.116.0",
-		"@types/turndown": "^5.0.6",
-		"openai": "^6.49.0",
-		"partial-json": "^0.1.7",
-		"shiki": "^4.4.3",
-		"turndown": "^7.2.4",
-		"zod": "^4.4.3"
+		"lint": "tsc -b",
+		"build": "tsc -b",
+		"start": "node apps/pace/dist/app.js"
 	},
 	"devDependencies": {
 		"@types/node": "^25.9.5",

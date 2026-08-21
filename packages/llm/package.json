@@ -1,0 +1,29 @@
+{
+	"name": "@pace/llm",
+	"version": "0.1.0",
+	"private": true,
+	"description": "Provider-agnostic LLM SDK: streaming, tool calls, model catalog.",
+	"main": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"exports": {
+		".": "./dist/index.js",
+		"./providers/*": "./dist/providers/*.js",
+		"./package.json": "./package.json"
+	},
+	"typesVersions": {
+		"*": {
+			"providers/*": [
+				"dist/providers/*"
+			]
+		}
+	},
+	"scripts": {
+		"build": "tsc -b",
+		"lint": "tsc -b"
+	},
+	"dependencies": {
+		"@anthropic-ai/sdk": "^0.116.0",
+		"openai": "^6.49.0",
+		"zod": "^4.4.3"
+	}
+}

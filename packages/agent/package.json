@@ -1,0 +1,21 @@
+{
+	"name": "@pace/agent",
+	"version": "0.1.0",
+	"private": true,
+	"description": "Agent runtime: agent loop, sessions, tools, MCP, skills, subagents.",
+	"main": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"scripts": {
+		"build": "tsc -b",
+		"lint": "tsc -b"
+	},
+	"dependencies": {
+		"@pace/llm": "*",
+		"partial-json": "^0.1.7",
+		"turndown": "^7.2.4",
+		"zod": "^4.4.3"
+	},
+	"devDependencies": {
+		"@types/turndown": "^5.0.6"
+	}
+}

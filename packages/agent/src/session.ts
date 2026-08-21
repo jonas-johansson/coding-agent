@@ -12,7 +12,7 @@ import type {
   ToolResultPart as ProviderToolResultPart,
   ToolUseBlock,
   UserMessage,
-} from "./provider";
+} from "@pace/llm";
 
 export type { ImageBlock, TextBlock, ToolUseBlock };
 

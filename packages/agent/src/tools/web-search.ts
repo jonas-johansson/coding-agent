@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { fetchWithRetry } from "../fetch-retry";
+import { fetchWithRetry } from "@pace/llm";
 import { defineTool, throwIfAborted, type ToolOutput } from "./core";
 
 // ─── Web Search ─────────────────────────────────────────────────────────────

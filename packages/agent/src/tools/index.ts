@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ToolDefinition } from "../provider";
+import type { ToolDefinition } from "@pace/llm";
 import { formatSkillsForToolDescription } from "../skill";
 import { formatAgentsForToolDescription } from "../agent";
 import { registerTool, tools, type ToolDescriptor } from "./core";

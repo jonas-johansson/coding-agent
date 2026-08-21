@@ -5,7 +5,7 @@
  */
 
 import { spawn, type ChildProcess } from "child_process";
-import { fetchWithRetry } from "./fetch-retry";
+import { fetchWithRetry } from "@pace/llm";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 

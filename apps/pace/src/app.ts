@@ -33,7 +33,7 @@ import {
   type SessionListItem,
   type TextBlock,
   type ThinkingBlock,
-} from "./session";
+} from "@pace/agent";
 import { initHighlighter } from "./syntax";
 import {
   tools,
@@ -48,20 +48,20 @@ import {
   setCurrentAgents,
   setAgentRuntime,
   filterToolsForAgent,
-} from "./tool";
+} from "@pace/agent";
 import {
   discoverSkills,
   findSkill,
   loadSkillContent,
   formatSkillsSystemPromptBlock,
   formatSkillsListing,
-} from "./skill";
+} from "@pace/agent";
 import {
   discoverAgents,
   formatAgentsListing,
   loadAgentBody,
-} from "./agent";
-import { runSubagent } from "./subagent";
+} from "@pace/agent";
+import { runSubagent } from "@pace/agent";
 import type {
   Provider,
   ProviderStream,
@@ -71,7 +71,7 @@ import type {
   ToolResultPart,
   ImageBlock,
   ProviderMessage,
-} from "./provider";
+} from "@pace/llm";
 import {
   DEFAULT_MODEL_ID,
   getAvailableModelIds,
@@ -83,17 +83,17 @@ import {
   type ModelConfig,
   type ModelSelection,
   type ModelVariant,
-} from "./models";
+} from "@pace/llm";
 import { readClipboardImage, type SupportedImageMediaType } from "./clipboard";
 import { sendDesktopNotification } from "./notify";
-import { onEvent } from "./events";
+import { onEvent } from "@pace/llm";
 import { loadPaceConfig, DEFAULT_COST_DISPLAY_CONFIG, type CostDisplayConfig } from "./config";
 import { resolveTheme } from "./themes";
 import { setTuiTheme } from "./tui";
 import { setShikiTheme } from "./syntax";
 import { detectTerminalBackground } from "./terminal-utils";
 import { loadPreferences, savePreferences } from "./preferences";
-import { loadCachedModelCatalog, refreshModelCatalog } from "./model-catalog";
+import { loadCachedModelCatalog, refreshModelCatalog } from "@pace/llm";
 import {
   initMcpServers,
   shutdownMcpServers,
@@ -102,7 +102,7 @@ import {
   listMcpServers,
   formatMcpListing,
   getConnectedMcpServers,
-} from "./mcp-tools";
+} from "@pace/agent";
 
 /**
  * Attempts to read AGENTS.md from the current working directory.
@@ -175,7 +175,7 @@ async function getOpenCodeGoProvider(): Promise<Provider> {
         "Missing API key for OpenCode Go. Set the OPENCODE_GO_API_KEY, OPENCODE_ZEN_API_KEY, or OPENCODE_API_KEY environment variable.",
       );
     }
-    const { OpenCodeZenProvider } = await import("./providers/opencode-zen");
+    const { OpenCodeZenProvider } = await import("@pace/llm/providers/opencode-zen");
     openCodeGoProvider = new OpenCodeZenProvider({
       apiKey,
       baseUrl: process.env.OPENCODE_GO_BASE_URL ?? "https://opencode.ai/zen/go/v1",
@@ -188,7 +188,7 @@ async function getProvider(config: ModelConfig): Promise<Provider> {
   switch (config.provider) {
     case "anthropic": {
       if (!anthropicProvider) {
-        const { AnthropicProvider } = await import("./providers/anthropic");
+        const { AnthropicProvider } = await import("@pace/llm/providers/anthropic");
         anthropicProvider = new AnthropicProvider();
       }
       return anthropicProvider;
@@ -202,7 +202,7 @@ async function getProvider(config: ModelConfig): Promise<Provider> {
               "Missing API key for OpenCode Zen. Set the OPENCODE_ZEN_API_KEY or OPENCODE_API_KEY environment variable.",
             );
           }
-          const { AnthropicProvider } = await import("./providers/anthropic");
+          const { AnthropicProvider } = await import("@pace/llm/providers/anthropic");
           openCodeZenAnthropicProvider = new AnthropicProvider({
             apiKey,
             baseURL: process.env.OPENCODE_ZEN_ANTHROPIC_BASE_URL ?? "https://opencode.ai/zen",
@@ -221,7 +221,7 @@ async function getProvider(config: ModelConfig): Promise<Provider> {
               "Missing API key for OpenCode Zen. Set the OPENCODE_ZEN_API_KEY or OPENCODE_API_KEY environment variable.",
             );
           }
-          const { OpenAIProvider } = await import("./providers/openai");
+          const { OpenAIProvider } = await import("@pace/llm/providers/openai");
           openCodeZenOpenAIProvider = new OpenAIProvider({
             apiKey,
             baseURL: process.env.OPENCODE_ZEN_BASE_URL ?? "https://opencode.ai/zen/v1",
@@ -252,28 +252,28 @@ async function getProvider(config: ModelConfig): Promise<Provider> {
         return getOpenCodeGoProvider();
       }
       if (!openCodeZenProvider) {
-        const { OpenCodeZenProvider } = await import("./providers/opencode-zen");
+        const { OpenCodeZenProvider } = await import("@pace/llm/providers/opencode-zen");
         openCodeZenProvider = new OpenCodeZenProvider();
       }
       return openCodeZenProvider;
     }
     case "openai": {
       if (!openAIProvider) {
-        const { OpenAIProvider } = await import("./providers/openai");
+        const { OpenAIProvider } = await import("@pace/llm/providers/openai");
         openAIProvider = new OpenAIProvider();
       }
       return openAIProvider;
     }
     case "fireworks": {
       if (!fireworksProvider) {
-        const { FireworksProvider } = await import("./providers/fireworks");
+        const { FireworksProvider } = await import("@pace/llm/providers/fireworks");
         fireworksProvider = new FireworksProvider();
       }
       return fireworksProvider;
     }
     case "lmstudio": {
       if (!lmStudioProvider) {
-        const { LmStudioProvider } = await import("./providers/lmstudio");
+        const { LmStudioProvider } = await import("@pace/llm/providers/lmstudio");
         lmStudioProvider = new LmStudioProvider();
       }
       return lmStudioProvider;

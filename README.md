@@ -10,7 +10,8 @@
 
 ```
 npm install
-tsx src/app.ts
+npm run build
+node apps/pace/dist/app.js
 ```
 
 Set at least one API key:

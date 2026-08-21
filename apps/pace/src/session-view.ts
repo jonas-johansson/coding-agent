@@ -9,10 +9,10 @@ import {
   type ToolResultEntry,
   type ToolResultPart,
   type UserEntry,
-} from "./session";
-import { tools, visualizeToolTitle } from "./tool";
+} from "@pace/agent";
+import { tools, visualizeToolTitle } from "@pace/agent";
 import { reasoningDisplayContent, reasoningDisplayTitle } from "./reasoning";
-import type { TextBlock, ToolUseBlock } from "./provider";
+import type { TextBlock, ToolUseBlock } from "@pace/llm";
 
 export type SessionRenderBlock = Omit<RenderBlock, "id">;
 
