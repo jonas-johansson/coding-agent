@@ -68,7 +68,6 @@ import type {
   ContentBlock as ProviderContentBlock,
   ToolUseBlock,
   ToolResultContent,
-  ToolResultPart,
   ImageBlock,
   ProviderMessage,
 } from "@pace/llm";
@@ -1745,11 +1744,7 @@ async function executeToolUseBlock(
       result: {
         type: "tool_result",
         tool_use_id: contentBlock.id,
-        content: toolOutput.content.reduce<ToolResultPart[]>((acc, p) => {
-          if (p.type === "text") acc.push({ type: "text", text: p.text });
-          else if (p.type === "image" && p.source.type === "base64") acc.push({ type: "image", mediaType: p.source.media_type, data: p.source.data });
-          return acc;
-        }, []),
+        content: toolOutput.content,
         ...(toolOutput.is_error && { is_error: true }),
       },
       ...(toolOutput.cost !== undefined && { cost: toolOutput.cost }),

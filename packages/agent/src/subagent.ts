@@ -12,7 +12,6 @@ import type {
   ProviderMessage,
   ToolDefinition,
   ToolResultContent,
-  ToolResultPart,
   ToolUseBlock,
   UsageInfo,
 } from "@pace/llm";
@@ -175,7 +174,7 @@ async function executeSubagentTool(
     return {
       type: "tool_result",
       tool_use_id: block.id,
-      content: toToolResultParts(output),
+      content: output.content,
       ...(output.is_error && { is_error: true }),
     };
   } catch (error) {
@@ -191,17 +190,6 @@ function makeToolError(toolUseId: string, text: string): ToolResultContent {
     content: [{ type: "text", text }],
     is_error: true,
   };
-}
-
-function toToolResultParts(output: ToolOutput): ToolResultPart[] {
-  return output.content.reduce<ToolResultPart[]>((acc, part) => {
-    if (part.type === "text") {
-      acc.push({ type: "text", text: part.text });
-    } else if (part.type === "image" && part.source.type === "base64") {
-      acc.push({ type: "image", mediaType: part.source.media_type, data: part.source.data });
-    }
-    return acc;
-  }, []);
 }
 
 function isToolUseBlock(block: ContentBlock): block is ToolUseBlock {

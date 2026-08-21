@@ -66,7 +66,7 @@ export const readTool = defineTool({
       const data = await readFile(filePath);
       recordFileState(filePath, data);
       return {
-        content: [{ type: "image", source: { type: "base64", media_type: imageMediaType, data: data.toString("base64") } }],
+        content: [{ type: "image", mediaType: imageMediaType, data: data.toString("base64") }],
       };
     }
 

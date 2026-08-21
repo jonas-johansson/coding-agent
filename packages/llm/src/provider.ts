@@ -133,6 +133,12 @@ export type ToolDefinition = {
   inputSchema: Record<string, unknown>;
 };
 
+/**
+ * Content blocks a tool may return to the model. Providers map these into
+ * their own wire formats.
+ */
+export type ToolOutputContent = Array<TextBlock | ImageBlock>;
+
 // ── Provider interface ───────────────────────────────────────────────────────
 
 export interface Provider {

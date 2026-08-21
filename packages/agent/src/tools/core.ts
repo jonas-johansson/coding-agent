@@ -1,6 +1,6 @@
-import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { parse } from "partial-json";
+import type { ToolOutputContent } from "@pace/llm";
 
 export function throwIfAborted(signal?: AbortSignal) {
   if (signal?.aborted) {
@@ -13,7 +13,7 @@ export function isAbortError(error: unknown): boolean {
 }
 
 export type ToolOutput = {
-  content: Array<Anthropic.TextBlockParam | Anthropic.ImageBlockParam | Anthropic.SearchResultBlockParam | Anthropic.DocumentBlockParam | Anthropic.ToolReferenceBlockParam>;
+  content: ToolOutputContent;
   is_error?: boolean;
   /**
    * Optional cost incurred by this tool call (e.g. subagent model usage).
