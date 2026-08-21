@@ -2353,20 +2353,6 @@ async function prompt(
   }
 }
 
-const exampleTable = `| Command | Description |
-|---|---|
-| /new | Start a new conversation, clearing all history and context. |
-| /model <model-id>[:variant] | Switch to a different model. Use without arguments to list available models. |
-| /variant [variant] | Show or switch the current model's variant. |
-| /theme <theme-name> | Switch to a different theme. Use without arguments to list available themes. |
-| /sessions | List saved sessions for the current project. |
-| /resume <session-id> | Resume a saved session by id. |
-| /undo | Rewind to before the last user message. |
-| /skills | List discovered skills available in the current directory. |
-| /agents | List available subagents for the current directory. |
-| /mcp | List connected MCP servers and their tools. |
-| /skill:<name> [args] | Run a discovered skill with optional arguments. Use /skills to see available skills.`;
-
 function parseCliArgs(): { resume: boolean } {
   // process.argv is [node, script, ...args]
   const args = process.argv.slice(2);
@@ -2449,12 +2435,6 @@ async function main() {
   initHighlighter().catch(() => {
     // Non-fatal — hand-rolled highlighting stays active.
   });
-
-  // tui.addBlock({
-  //   role: "assistant",
-  //   title: "Example table below",
-  //   content: exampleTable
-  // });
 
   onEvent("rate-limit-retry", (event) => {
     const seconds = (event.waitMs / 1000).toFixed(1);

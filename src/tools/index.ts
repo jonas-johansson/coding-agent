@@ -1,4 +1,3 @@
-import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import type { ToolDefinition } from "../provider";
 import { formatSkillsForToolDescription } from "../skill";
@@ -6,7 +5,6 @@ import { formatAgentsForToolDescription } from "../agent";
 import { registerTool, tools, type ToolDescriptor } from "./core";
 import { readTool, writeTool, editTool } from "./files";
 import { bashTool } from "./bash";
-import { toolComposerTool } from "./tool-composer";
 import { webFetchTool } from "./web-fetch";
 import { webSearchTool } from "./web-search";
 import { skillTool, setCurrentSkills, getCurrentSkills } from "./skill";
@@ -23,7 +21,6 @@ const builtInTools: ToolDescriptor[] = [
   writeTool,
   editTool,
   bashTool,
-  //toolComposerTool,
   webFetchTool,
   webSearchTool,
   skillTool,
@@ -36,20 +33,6 @@ export * from "./core";
 export { truncateToolOutputIfNeeded } from "./output";
 export { setCurrentSkills };
 export { setCurrentAgents, setAgentRuntime, filterToolsForAgent };
-
-function makeAnthropicToolsFromCustomTools() {
-  let transformedTools: Anthropic.Tool[] = [];
-  for (let i = 0; i < tools.length; i++) {
-    transformedTools.push({
-      name: tools[i].name,
-      description: tools[i].description,
-      input_schema: z.toJSONSchema(tools[i].inputSchema) as Anthropic.Tool["input_schema"],
-    });
-  }
-  return transformedTools;
-}
-
-export const toolsTransformedToAnthropicStyle: Anthropic.Tool[] = makeAnthropicToolsFromCustomTools();
 
 /**
  * Augment a tool's description with dynamic listings (skills, agents).
