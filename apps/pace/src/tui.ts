@@ -1,29 +1,19 @@
 import { type BlockRole, type BlockTheme, type TuiTheme, BUILT_IN_THEMES } from "./themes.js";
-
-export type BlockState = "running" | "done" | "error";
-
-export type RenderBlock = {
-  id: number;
-  key?: string;
-  role: BlockRole;
-  title?: string;
-  content: string;
-  collapsed?: boolean;
-  state?: BlockState;
-};
-
-export type BlockPatch = Partial<Pick<RenderBlock, "title" | "content" | "state" | "collapsed">>;
-
-export type ContextInfo = {
-  usedTokens: number;
-  contextWindow: number;
-  cacheReadTokens?: number;
-  cacheCreationTokens?: number;
-};
+import {
+  DEFAULT_COST_DISPLAY_CONFIG,
+  formatCost,
+  formatCostAmount,
+  formatSessionCost,
+  formatTokenCount,
+  type BlockState,
+  type BlockPatch,
+  type ContextInfo,
+  type RenderBlock,
+} from "./view-model";
 
 import { homedir } from "os";
 import { basename } from "path";
-import { DEFAULT_COST_DISPLAY_CONFIG, type CostDisplayConfig } from "./config";
+import { type CostDisplayConfig } from "./config";
 import { tokenizeCode, hexToAnsi256, onHighlighterReady } from "./syntax.js";
 import { fuzzyMatch } from "./fuzzy.js";
 
@@ -4978,51 +4968,12 @@ function isEmojiPresentation(codePoint: number) {
   );
 }
 
-export function formatTokenCount(tokens: number): string {
-  if (tokens >= 1_000_000) {
-    const value = tokens / 1_000_000;
-    return value % 1 === 0 ? `${value}M` : `${value.toFixed(1)}M`;
-  }
-  if (tokens >= 1_000) {
-    const value = tokens / 1_000;
-    return value % 1 === 0 ? `${value}k` : `${value.toFixed(1)}k`;
-  }
-  return `${tokens}`;
-}
-
 function formatContextInfo(info: ContextInfo): string {
   const used = formatTokenCount(info.usedTokens);
   const percent = info.contextWindow > 0
     ? Math.round((info.usedTokens / info.contextWindow) * 100)
     : 0;
   return `${used} (${percent}%)`;
-}
-
-export function formatCost(cost: number, config: CostDisplayConfig): string {
-  const convertedCost = cost * config.conversionRate;
-  const amount = formatCostAmount(convertedCost, config.fractionDigits);
-  return config.format.replaceAll("{amount}", amount);
-}
-
-/** Format a cost for display in session listings, always rounded to 3 decimals. */
-export function formatSessionCost(cost: number, config: CostDisplayConfig): string {
-  const convertedCost = cost * config.conversionRate;
-  const amount = convertedCost.toFixed(3);
-  return config.format.replaceAll("{amount}", amount);
-}
-
-function formatCostAmount(cost: number, fractionDigits: number | undefined): string {
-  if (fractionDigits !== undefined) {
-    return cost.toFixed(fractionDigits);
-  }
-  if (cost < 0.01) {
-    // Show sub-cent costs with more precision
-    return cost.toFixed(4);
-  }
-  if (cost < 1) {
-    return cost.toFixed(3);
-  }
-  return cost.toFixed(2);
 }
 
 function fg(code: number) {

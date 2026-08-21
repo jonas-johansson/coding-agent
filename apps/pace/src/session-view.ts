@@ -1,5 +1,5 @@
-import type { RenderBlock } from "./tui";
-import { formatCost, formatTokenCount } from "./tui";
+import type { RenderBlock } from "./view-model";
+import { formatCost, formatTokenCount } from "./view-model";
 import { DEFAULT_COST_DISPLAY_CONFIG, type CostDisplayConfig } from "./config";
 import {
   getActivePath,

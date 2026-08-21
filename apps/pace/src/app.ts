@@ -2,7 +2,8 @@ import { readFile, stat } from "fs/promises";
 import { existsSync } from "fs";
 import { homedir } from "os";
 import { join, resolve, extname } from "path";
-import { Tui, formatSessionCost } from "./tui";
+import { Tui } from "./tui";
+import { formatSessionCost } from "./view-model";
 import { getGitBranch } from "./git.js";
 import {
   formatTurnSummary,
