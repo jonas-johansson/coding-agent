@@ -61,7 +61,7 @@ import {
   formatAgentsListing,
   loadAgentBody,
 } from "@pace/agent";
-import { runSubagent } from "@pace/agent";
+import { runAgentLoop, runSubagent } from "@pace/agent";
 import type {
   ProviderStream,
   ContentBlock as ProviderContentBlock,
@@ -1523,144 +1523,6 @@ function ensureToolBlock(
   return id;
 }
 
-function isToolUseBlock(block: ProviderContentBlock): block is ToolUseBlock {
-  return block.type === "tool_use";
-}
-
-function makeToolErrorResult(toolUseId: string, text: string): ToolResultContent {
-  return {
-    type: "tool_result",
-    tool_use_id: toolUseId,
-    is_error: true,
-    content: [{ type: "text", text }],
-  };
-}
-
-type ExecutedTool = {
-  result: ToolResultContent;
-  cost?: number;
-  display?: string;
-};
-
-async function executeToolUseBlock(
-  contentBlock: ToolUseBlock,
-  toolBlocks: Map<string, number>,
-  signal: AbortSignal,
-): Promise<ExecutedTool> {
-  if (signal.aborted) throw new DOMException("Aborted", "AbortError");
-
-  const toolToExecute = tools.find((tool) => tool.name === contentBlock.name);
-  const blockId = ensureToolBlock(toolBlocks, contentBlock.id, contentBlock.name);
-
-  if (!toolToExecute) {
-    const errorText = `Couldn't find tool ${contentBlock.name}`;
-    tui.updateBlock(blockId, { content: errorText, state: "error" });
-    return { result: makeToolErrorResult(contentBlock.id, errorText) };
-  }
-
-  const inputParseResult = toolToExecute.inputSchema.safeParse(contentBlock.input);
-  if (!inputParseResult.success) {
-    const errorText =
-      `Input did not match schema:\n${JSON.stringify(inputParseResult.error.issues, null, 2)}\n\n` +
-      `Received input:\n${JSON.stringify(contentBlock.input, null, 2)}`;
-
-    tui.updateBlock(blockId, {
-      title: visualizeToolTitle(contentBlock.name, contentBlock.input),
-      content: errorText,
-      state: "error",
-    });
-
-    return {
-      result: makeToolErrorResult(
-        contentBlock.id,
-        `Input did not match schema: ${JSON.stringify(inputParseResult.error.issues)}`,
-      ),
-    };
-  }
-
-  tui.updateBlock(blockId, { title: visualizeToolTitle(contentBlock.name, inputParseResult.data) });
-  tui.setStatus(`Using tool: ${contentBlock.name}`);
-
-  try {
-    if (signal.aborted) throw new DOMException("Aborted", "AbortError");
-    let streamedToolContent = "";
-    const rawToolOutput = await toolToExecute.execute(inputParseResult.data, signal, {
-      onOutput: (chunk) => {
-        streamedToolContent += chunk;
-        tui.updateBlock(blockId, { content: streamedToolContent });
-      },
-      onContent: (content) => {
-        streamedToolContent = content;
-        tui.updateBlock(blockId, { content });
-      },
-    });
-    if (signal.aborted) throw new DOMException("Aborted", "AbortError");
-    const toolOutput = toolToExecute.truncateOutput === false
-      ? rawToolOutput
-      : await truncateToolOutputIfNeeded(rawToolOutput, contentBlock.name, contentBlock.id);
-    if (signal.aborted) throw new DOMException("Aborted", "AbortError");
-    const showContent = toolToExecute.showContent !== false || toolOutput.is_error;
-    const displayContent = toolOutput.display
-      ?? (showContent ? formatToolResultBody(toolOutput) : "");
-    tui.updateBlock(blockId, {
-      content: displayContent,
-      state: toolOutput.is_error ? "error" : "done",
-    });
-
-    // Tools can report their own cost (e.g. subagent model usage). Add it to
-    // the session total; it is also persisted on the tool_result entry.
-    if (toolOutput.cost !== undefined && toolOutput.cost > 0) {
-      accumulatedCost += toolOutput.cost;
-      tui.setCost(accumulatedCost);
-    }
-
-    return {
-      result: {
-        type: "tool_result",
-        tool_use_id: contentBlock.id,
-        content: toolOutput.content,
-        ...(toolOutput.is_error && { is_error: true }),
-      },
-      ...(toolOutput.cost !== undefined && { cost: toolOutput.cost }),
-      ...(toolOutput.display !== undefined && { display: toolOutput.display }),
-    };
-  } catch (error: unknown) {
-    if (isAbortError(error)) throw error;
-    const errorText = formatError(error);
-    tui.updateBlock(blockId, { content: errorText, state: "error" });
-    return { result: makeToolErrorResult(contentBlock.id, errorText) };
-  } finally {
-    refreshCwd();
-  }
-}
-
-async function executeToolUseBatch(
-  toolUseBlocks: ToolUseBlock[],
-  toolBlocks: Map<string, number>,
-  signal: AbortSignal,
-  onComplete: (toolUseId: string, executed: ExecutedTool) => void,
-): Promise<ExecutedTool[]> {
-  const hasExclusiveTool = toolUseBlocks.some((contentBlock) => {
-    const toolToExecute = tools.find((tool) => tool.name === contentBlock.name);
-    return toolToExecute?.concurrency !== "safe";
-  });
-
-  const runOne = async (contentBlock: ToolUseBlock): Promise<ExecutedTool> => {
-    const executed = await executeToolUseBlock(contentBlock, toolBlocks, signal);
-    onComplete(contentBlock.id, executed);
-    return executed;
-  };
-
-  if (hasExclusiveTool) {
-    const results: ExecutedTool[] = [];
-    for (const contentBlock of toolUseBlocks) {
-      results.push(await runOne(contentBlock));
-    }
-    return results;
-  }
-
-  return Promise.all(toolUseBlocks.map((contentBlock) => runOne(contentBlock)));
-}
 
 async function handleUserInput(userMessage: string) {
   if (promptRunning) {
@@ -1805,25 +1667,6 @@ async function prompt(
   currentAbortController = abortController;
   const signal = abortController.signal;
 
-  let assistantMessagePushed = false;
-  let anyAssistantMessagePushed = false;
-  let pendingToolUseIds: string[] = [];
-  let currentToolUseOrder: string[] = [];
-  let completedToolResults = new Map<string, ExecutedTool>();
-  let acceptToolResults = true;
-  let currentToolBlocks = new Map<string, number>();
-  let imageCapNoticeShown = false;
-
-  const appendToolResultToDraft = (executed: ExecutedTool) => {
-    appendTurnDraftEntry(turnDraft, createToolResultEntry({
-      toolUseId: executed.result.tool_use_id,
-      content: executed.result.content,
-      ...(executed.result.is_error && { isError: true }),
-      ...(executed.cost !== undefined && { cost: executed.cost }),
-      ...(executed.display !== undefined && { display: executed.display }),
-    }));
-  };
-
   const [globalAgentsFileContents, agentsFileContents, skills, agents] = await Promise.all([
     loadGlobalAgentsFile(),
     loadAgentsFile(),
@@ -1914,13 +1757,55 @@ async function prompt(
   const provider = await resolveProvider(modelConfig);
   const toolDefs = getProviderToolDefinitions();
 
+  // ── View state driven by loop events ──
+  let accText = "";
+  let currentTextBlockId: number | undefined;
+  let accReasoning = "";
+  let currentReasoningBlockId: number | undefined;
+  let currentReasoningTitle: string | undefined;
+  const reasoningBlocks: ThinkingBlock[] = [];
+  const streamingTools = new Map<string, { name: string; inputJson: string }>();
+  const toolBlocks = new Map<string, number>();
+  const streamedToolContentByTool = new Map<string, string>();
+  const runningToolUseIds = new Set<string>();
+  let imageCapNoticeShown = false;
+
+  const finishReasoningBlock = () => {
+    if (currentReasoningBlockId === undefined) {
+      return;
+    }
+
+    if (accReasoning) {
+      reasoningBlocks.push({ type: "thinking", thinking: accReasoning });
+    }
+
+    tui.updateBlock(currentReasoningBlockId, {
+      title: reasoningDisplayTitle(accReasoning),
+      collapsed: true,
+    });
+    currentReasoningBlockId = undefined;
+    accReasoning = "";
+    currentReasoningTitle = undefined;
+  };
+
   try {
-    while (true) {
-      // Deliver queued steering messages at this loop boundary. Each becomes
-      // a user entry in the current turn, so the next provider request
-      // includes it.
-      const steeringMessages = steeringQueue.splice(0);
-      if (steeringMessages.length > 0) {
+    const result = await runAgentLoop({
+      provider,
+      model: modelConfig.providerModel,
+      system: systemText,
+      tools,
+      toolDefs,
+      maxTokens: modelConfig.maxOutputTokens,
+      providerOptions: {
+        ...(modelConfig.providerOptions ?? {}),
+        ...(modelVariant?.providerOptions ?? {}),
+        ...((modelConfig.provider === "opencode" || modelConfig.provider === "fireworks")
+          && { supportsImages: modelConfig.supportsImages }),
+      },
+      signal,
+
+      takeSteeringMessages: () => {
+        const steeringMessages = steeringQueue.splice(0);
         for (const steeringText of steeringMessages) {
           appendTurnDraftEntry(turnDraft, createUserEntry({
             content: [{ type: "text", text: steeringText }],
@@ -1929,70 +1814,38 @@ async function prompt(
           tui.addBlock({ role: "user", content: steeringText });
         }
         tui.setSteeringQueueCount(0);
-      }
+        return steeringMessages;
+      },
 
-      tui.setStatus("Thinking");
-
-      const imageCap = capProviderMessageImages(
-        sessionToProviderMessages(activeSession, turnDraft),
-        MAX_REQUEST_BYTES * REQUEST_IMAGE_PAYLOAD_WARNING_RATIO,
-      );
-      if (imageCap.droppedImages > 0 && !imageCapNoticeShown) {
-        imageCapNoticeShown = true;
-        tui.addBlock({
-          role: "assistant",
-          title: "Context images omitted",
-          content: `${imageCap.droppedImages} older image${imageCap.droppedImages === 1 ? "" : "s"} (${(imageCap.droppedBytes / (1024 * 1024)).toFixed(1)} MB base64) omitted from this provider request to stay under the request-size limit. Saved session history is unchanged.`,
-        });
-      }
-
-      const stream: ProviderStream = await provider.stream({
-        model: modelConfig.providerModel,
-        system: systemText,
-        messages: imageCap.messages,
-        tools: toolDefs,
-        maxTokens: modelConfig.maxOutputTokens,
-        providerOptions: {
-          ...(modelConfig.providerOptions ?? {}),
-          ...(modelVariant?.providerOptions ?? {}),
-          ...((modelConfig.provider === "opencode" || modelConfig.provider === "fireworks")
-            && { supportsImages: modelConfig.supportsImages }),
-        },
-        signal,
-      });
-
-      let currentTextBlockId: number | undefined;
-      let accText = "";
-      let currentReasoningBlockId: number | undefined;
-      let accReasoning = "";
-      let currentReasoningTitle: string | undefined;
-      const reasoningBlocks: ThinkingBlock[] = [];
-      const finishReasoningBlock = () => {
-        if (currentReasoningBlockId === undefined) {
-          return;
+      getMessages: () => {
+        // Reasoning blocks are scoped to a single provider request.
+        reasoningBlocks.length = 0;
+        const imageCap = capProviderMessageImages(
+          sessionToProviderMessages(activeSession, turnDraft),
+          MAX_REQUEST_BYTES * REQUEST_IMAGE_PAYLOAD_WARNING_RATIO,
+        );
+        if (imageCap.droppedImages > 0 && !imageCapNoticeShown) {
+          imageCapNoticeShown = true;
+          tui.addBlock({
+            role: "assistant",
+            title: "Context images omitted",
+            content: `${imageCap.droppedImages} older image${imageCap.droppedImages === 1 ? "" : "s"} (${(imageCap.droppedBytes / (1024 * 1024)).toFixed(1)} MB base64) omitted from this provider request to stay under the request-size limit. Saved session history is unchanged.`,
+          });
         }
+        return imageCap.messages;
+      },
 
-        if (accReasoning) {
-          reasoningBlocks.push({ type: "thinking", thinking: accReasoning });
-        }
+      computeCost: (usage) => computeCallCost(
+        modelConfig,
+        usage.inputTokens,
+        // For cost: use inputTokens minus cache tokens for the base input cost
+        usage.inputTokens - usage.cacheCreationTokens - usage.cacheReadTokens,
+        usage.cacheCreationTokens,
+        usage.cacheReadTokens,
+        usage.outputTokens,
+      ),
 
-        tui.updateBlock(currentReasoningBlockId, {
-          title: reasoningDisplayTitle(accReasoning),
-          collapsed: true,
-        });
-        currentReasoningBlockId = undefined;
-        accReasoning = "";
-        currentReasoningTitle = undefined;
-      };
-      const streamingTools = new Map<string, { name: string; inputJson: string }>();
-      const toolBlocks = new Map<string, number>();
-      currentToolBlocks = toolBlocks;
-
-      // Start timing when the first stream event arrives so the TPS stat
-      // measures generation speed, not time-to-first-token.
-      const streamStart = performance.now();
-
-      for await (const event of stream) {
+      onStreamEvent: (event) => {
         switch (event.type) {
           case "text_start": {
             finishReasoningBlock();
@@ -2066,6 +1919,7 @@ async function prompt(
             accText = "";
             finishReasoningBlock();
             ensureToolBlock(toolBlocks, event.id, event.name);
+            runningToolUseIds.add(event.id);
             tui.setStatus(`Preparing tool: ${event.name}`);
             break;
           }
@@ -2091,87 +1945,96 @@ async function prompt(
             break;
           }
         }
-      }
+      },
 
-      finishReasoningBlock();
-
-      const response = await stream.finalMessage();
-      const streamDurationMs = Math.max(1, performance.now() - streamStart);
-
-      // Update usage tracking
-      lastCacheReadTokens = response.usage.cacheReadTokens;
-      lastCacheCreationTokens = response.usage.cacheCreationTokens;
-      lastInputTokens = response.usage.inputTokens;
-      lastOutputTokens = response.usage.outputTokens;
-
-      const callCost = computeCallCost(
-        modelConfig,
-        response.usage.inputTokens,
-        // For cost: use inputTokens minus cache tokens for the base input cost
-        response.usage.inputTokens - response.usage.cacheCreationTokens - response.usage.cacheReadTokens,
-        response.usage.cacheCreationTokens,
-        response.usage.cacheReadTokens,
-        response.usage.outputTokens,
-      );
-      accumulatedCost += callCost;
-
-      updateContextInfo();
-
-      const assistantContent: SessionContentBlock[] = [...reasoningBlocks, ...response.content];
-      appendTurnDraftEntry(turnDraft, createAssistantEntry({
-        content: assistantContent,
-        provider: modelConfig.provider,
-        modelId: modelConfig.id,
-        ...(modelVariant?.id !== undefined && { modelVariant: modelVariant.id }),
-        tokensIn: response.usage.inputTokens,
-        tokensOut: response.usage.outputTokens,
-        cacheReadTokens: response.usage.cacheReadTokens,
-        cacheCreationTokens: response.usage.cacheCreationTokens,
-        cost: callCost,
-        streamDurationMs,
-        ...(response.providerMetadata !== undefined && { providerMetadata: response.providerMetadata }),
-      }));
-      assistantMessagePushed = true;
-      anyAssistantMessagePushed = true;
-
-      // Collect and execute tool calls. Results are returned as one grouped
-      // user message so every tool_use in this assistant turn is answered
-      // together, even when execution happens in parallel.
-      const toolUseBlocks = response.content.filter(isToolUseBlock);
-      pendingToolUseIds = toolUseBlocks.map((block) => block.id);
-      currentToolUseOrder = pendingToolUseIds;
-      completedToolResults = new Map<string, ExecutedTool>();
-      acceptToolResults = true;
-
-      if (toolUseBlocks.length > 0) {
-        const executedTools = await executeToolUseBatch(
-          toolUseBlocks,
-          toolBlocks,
-          signal,
-          (toolUseId, executed) => {
-            if (!acceptToolResults) return;
-            completedToolResults.set(toolUseId, executed);
-            pendingToolUseIds = pendingToolUseIds.filter((id) => id !== toolUseId);
-          },
-        );
-
-        for (const executed of executedTools) {
-          appendToolResultToDraft(executed);
+      onToolOutput: (toolUseId, chunk) => {
+        const blockId = toolBlocks.get(toolUseId);
+        if (blockId !== undefined) {
+          streamedToolContentByTool.set(toolUseId, (streamedToolContentByTool.get(toolUseId) ?? "") + chunk);
+          tui.updateBlock(blockId, { content: streamedToolContentByTool.get(toolUseId) ?? "" });
         }
-        currentToolUseOrder = [];
-        completedToolResults = new Map<string, ExecutedTool>();
-      }
+      },
 
-      if (toolUseBlocks.length > 0 || response.stopReason === "tool_use") {
-        assistantMessagePushed = false;
-        pendingToolUseIds = [];
-        continue;
-      }
+      onToolContent: (toolUseId, content) => {
+        const blockId = toolBlocks.get(toolUseId);
+        if (blockId !== undefined) {
+          streamedToolContentByTool.set(toolUseId, content);
+          tui.updateBlock(blockId, { content });
+        }
+      },
 
-      break;
-    }
+      onResponse: (response, meta) => {
+        lastCacheReadTokens = response.usage.cacheReadTokens;
+        lastCacheCreationTokens = response.usage.cacheCreationTokens;
+        lastInputTokens = response.usage.inputTokens;
+        lastOutputTokens = response.usage.outputTokens;
+
+        accumulatedCost += meta.cost;
+        tui.setCost(accumulatedCost);
+
+        updateContextInfo();
+
+        appendTurnDraftEntry(turnDraft, createAssistantEntry({
+          content: [...reasoningBlocks, ...response.content],
+          provider: modelConfig.provider,
+          modelId: modelConfig.id,
+          ...(modelVariant?.id !== undefined && { modelVariant: modelVariant.id }),
+          tokensIn: response.usage.inputTokens,
+          tokensOut: response.usage.outputTokens,
+          cacheReadTokens: response.usage.cacheReadTokens,
+          cacheCreationTokens: response.usage.cacheCreationTokens,
+          cost: meta.cost,
+          streamDurationMs: meta.streamDurationMs,
+          ...(response.providerMetadata !== undefined && { providerMetadata: response.providerMetadata }),
+        }));
+      },
+
+      onToolResults: (executedTools) => {
+        for (const executed of executedTools) {
+          runningToolUseIds.delete(executed.result.tool_use_id);
+          streamedToolContentByTool.delete(executed.result.tool_use_id);
+
+          if (executed.cost !== undefined && executed.cost > 0) {
+            accumulatedCost += executed.cost;
+            tui.setCost(accumulatedCost);
+          }
+
+          const blockId = toolBlocks.get(executed.result.tool_use_id);
+          if (blockId !== undefined) {
+            tui.updateBlock(blockId, {
+              content: executed.display,
+              state: executed.result.is_error ? "error" : "done",
+            });
+          }
+
+          appendTurnDraftEntry(turnDraft, createToolResultEntry({
+            toolUseId: executed.result.tool_use_id,
+            content: executed.result.content,
+            ...(executed.result.is_error && { isError: true }),
+            ...(executed.cost !== undefined && { cost: executed.cost }),
+            ...(executed.display !== undefined && { display: executed.display }),
+          }));
+        }
+      },
+    });
 
     await commitAndSaveTurnDraft();
+
+    if (result.cancelled) {
+      // Mark any in-progress tool blocks as cancelled
+      for (const [toolUseId, blockId] of toolBlocks) {
+        if (runningToolUseIds.has(toolUseId)) {
+          tui.updateBlock(blockId, { content: "Cancelled", state: "error" });
+        }
+      }
+
+      tui.addBlock({
+        role: "assistant",
+        title: "Cancelled",
+        content: "Prompt execution cancelled.",
+      });
+      return;
+    }
 
     // Show the turn usage summary after the final message. The draft's last
     // entry is the final assistant entry once the turn completed.
@@ -2186,23 +2049,14 @@ async function prompt(
     }
   } catch (error: unknown) {
     if (isAbortError(error)) {
-      acceptToolResults = false;
       // Mark any in-progress tool blocks as cancelled
-      for (const [toolUseId, blockId] of currentToolBlocks) {
-        if (pendingToolUseIds.includes(toolUseId)) {
+      for (const [toolUseId, blockId] of toolBlocks) {
+        if (runningToolUseIds.has(toolUseId)) {
           tui.updateBlock(blockId, { content: "Cancelled", state: "error" });
         }
       }
 
-      if (assistantMessagePushed && pendingToolUseIds.length > 0) {
-        for (const toolUseId of currentToolUseOrder) {
-          const executed = completedToolResults.get(toolUseId)
-            ?? { result: makeToolErrorResult(toolUseId, "Tool execution was cancelled by the user.") };
-          appendToolResultToDraft(executed);
-        }
-      }
-
-      if (!isTurnDraftEmpty(turnDraft)) {
+      if (!turnDraftCommitted && !isTurnDraftEmpty(turnDraft)) {
         await commitAndSaveTurnDraft();
       }
 

@@ -7,6 +7,7 @@
 	"scripts": {
 		"lint": "tsc -b",
 		"build": "tsc -b",
+		"test": "node --test",
 		"start": "node apps/pace/dist/app.js"
 	},
 	"devDependencies": {
