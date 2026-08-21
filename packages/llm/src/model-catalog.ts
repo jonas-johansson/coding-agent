@@ -7,7 +7,7 @@
  */
 
 import { createHash } from "crypto";
-import { mkdir, readFile, stat, writeFile } from "fs/promises";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "fs/promises";
 import { homedir } from "os";
 import { dirname, join } from "path";
 import { z } from "zod";
@@ -327,7 +327,15 @@ async function readCatalogFile(path: string): Promise<ModelsDevCatalog | undefin
     throw error;
   });
   if (!raw) return undefined;
-  return catalogSchema.parse(JSON.parse(raw));
+
+  try {
+    return catalogSchema.parse(JSON.parse(raw));
+  } catch {
+    // A truncated or incompatible cache must never take the app down. Delete
+    // the file so the next refresh skips the freshness check and re-downloads.
+    await rm(path, { force: true }).catch(() => undefined);
+    return undefined;
+  }
 }
 
 async function cacheFresh(path: string): Promise<boolean> {
@@ -338,7 +346,16 @@ async function cacheFresh(path: string): Promise<boolean> {
 
 async function writeCatalogCache(path: string, text: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, text, "utf8");
+  // Write to a temporary file first, then rename. A rename is atomic, so
+  // readers never see a half-written cache if the process dies mid-write.
+  const tempPath = `${path}.${process.pid}.tmp`;
+  try {
+    await writeFile(tempPath, text, "utf8");
+    await rename(tempPath, path);
+  } catch (error) {
+    await rm(tempPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
 async function fetchCatalogText(): Promise<string | undefined> {
