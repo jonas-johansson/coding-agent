@@ -234,10 +234,77 @@ MCP tools show up as `mcp__<server>__<tool>` and the agent uses them automatical
 
 `mcp.json` is a stable, manually-authored config file — Pace never writes to it. To enable or disable servers at runtime, press **Ctrl+E** or run `/mcps` to open a picker with checkboxes (like the model picker): space toggles a server, and the change takes effect immediately (the server connects or disconnects and its tools appear or disappear). The enabled/disabled state is saved to `~/.config/pace/prefs.json` and wins over the `enabled` field in `mcp.json`.
 
+## Project structure
+
+Pace is an npm workspaces monorepo with three packages, layered so each package only depends on the one below it:
+
+```
+apps/pace       →  @pace/agent  →  @pace/llm
+(TUI app)          (runtime)        (LLM SDK)
+```
+
+| Workspace | Package | Purpose |
+|---|---|---|
+| `packages/llm` | `@pace/llm` | Provider-agnostic LLM SDK: streaming requests, tool calls, model catalog |
+| `packages/agent` | `@pace/agent` | Agent runtime: agent loop, sessions, tools, MCP, skills, subagents |
+| `apps/pace` | `pace` | The terminal experience: input, rendering, slash commands |
+
+### packages/llm — LLM SDK
+
+| Module | Purpose |
+|---|---|
+| `src/provider.ts` | Neutral message, stream-event, tool-result, and `Provider` interface types |
+| `src/providers/anthropic.ts` | Anthropic Messages API provider |
+| `src/providers/openai.ts` | OpenAI Responses API provider |
+| `src/providers/openai-compatible.ts` | Shared Chat Completions/responses implementation for OpenAI-compatible endpoints |
+| `src/providers/{opencode-zen,fireworks,lmstudio}.ts` | Thin configurations of the shared OpenAI-compatible provider |
+| `src/registry.ts` | `resolveProvider()` model-to-provider routing with lazy instantiation |
+| `src/models.ts`, `src/model-catalog.ts` | Built-in model catalog plus remote refresh from models.dev |
+| `src/events.ts`, `src/fetch-retry.ts` | Typed event bus and fetch retry/backoff |
+
+### packages/agent — agent runtime
+
+| Module | Purpose |
+|---|---|
+| `src/loop.ts` | `runAgentLoop()`: the event-driven stream → tool-call → stream cycle, shared by the main prompt and subagents |
+| `src/session.ts` | Tree-shaped session entries, turn drafts, undo, JSON persistence |
+| `src/tools/` | Tool registry and built-in tools (`bash`, `read`, `write`, `edit`, `web-fetch`, `web-search`, `skill`, `agent`) |
+| `src/mcp-config.ts`, `src/mcp-transport.ts`, `src/mcp-client.ts`, `src/mcp-tools.ts` | Hand-rolled MCP client and tool bridging |
+| `src/skill.ts`, `src/agent.ts`, `src/subagent.ts` | Skill discovery, subagent definitions, headless subagent execution |
+| `src/preferences.ts`, `src/frontmatter.ts` | Runtime preference storage and YAML frontmatter parsing |
+
+### apps/pace — terminal app
+
+| Module | Purpose |
+|---|---|
+| `src/app.ts` | Entry point: startup, slash commands, system prompt assembly, loop-event → UI wiring |
+| `src/tui.ts` | ANSI renderer: blocks, input editor, overlays, mouse support |
+| `src/view-model.ts` | Render-block types and formatters shared by live view and session replay |
+| `src/themes.ts`, `src/syntax.ts`, `src/terminal-utils.ts`, `src/clipboard.ts`, `src/git.ts`, `src/fuzzy.ts`, `src/reasoning.ts`, `src/session-view.ts` | Supporting UI modules |
+
 ## Development
+
+Install and build all workspaces:
+
+```sh
+npm install
+npm run build
+```
 
 Type check:
 
 ```
 npm run lint
+```
+
+Run the test suite (mock-provider tests for the agent loop):
+
+```sh
+npm test
+```
+
+Start the app from source:
+
+```sh
+npm start
 ```
