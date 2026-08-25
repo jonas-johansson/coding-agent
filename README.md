@@ -8,10 +8,15 @@
 
 ## Quick start
 
-```
+```sh
 npm install
 npm run build
 node apps/pace/dist/app.js
+```
+
+In your .bashrc set:
+```sh
+alias pace='node ~/dev/pace/apps/pace/dist/app.js'
 ```
 
 Set at least one API key:
