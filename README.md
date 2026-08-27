@@ -72,6 +72,8 @@ Pace ships with a curated built-in model catalog and also loads new models from 
 | `opencode/deepseek-v4-flash` |
 | `opencode/deepseek-v4-flash-free` |
 | `opencode/glm-5.2` |
+| `opencode/glm-5.3` |
+| `opencode/glm-5.3-flash` |
 | `fireworks/kimi-k2.6` |
 | `fireworks/kimi-k2.7-code` |
 | `opencode/gpt-5.5` |

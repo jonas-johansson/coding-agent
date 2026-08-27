@@ -166,6 +166,24 @@ const GLM_5_2_REASONING_VARIANTS: Record<string, ModelVariant> = {
   },
 };
 
+const GLM_5_3_FLASH_REASONING_VARIANTS: Record<string, ModelVariant> = {
+  low: {
+    id: "low",
+    label: "reasoning effort: low",
+    providerOptions: { reasoning_effort: "low" },
+  },
+  high: {
+    id: "high",
+    label: "reasoning effort: high",
+    providerOptions: { reasoning_effort: "high" },
+  },
+  max: {
+    id: "max",
+    label: "reasoning effort: max",
+    providerOptions: { reasoning_effort: "max" },
+  },
+};
+
 const FABLE_5_EFFORT_VARIANTS: Record<string, ModelVariant> = {
   low: {
     id: "low",
@@ -445,6 +463,18 @@ export const MODEL_METADATA: Record<string, ModelMetadata> = {
       cacheWritePerMTok: 0,
       cacheReadPerMTok: 0.26,
       outputPerMTok: 4.40,
+    },
+  },
+  "opencode/glm-5.3-flash": {
+    contextWindow: 1_000_000,
+    maxOutputTokens: 131_072,
+    supportsImages: true,
+    variants: GLM_5_3_FLASH_REASONING_VARIANTS,
+    pricing: {
+      inputPerMTok: 0.15,
+      cacheWritePerMTok: 0,
+      cacheReadPerMTok: 0.03,
+      outputPerMTok: 0.50,
     },
   },
   "fireworks/kimi-k2.6": {

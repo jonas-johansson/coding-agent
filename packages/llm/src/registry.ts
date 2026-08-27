@@ -99,9 +99,9 @@ export async function resolveProvider(config: ModelConfig): Promise<Provider> {
         // not the regular Zen endpoint.
         return getOpenCodeGoProvider();
       }
-      if (config.providerModel === "glm-5.3") {
-        // GLM-5.3 is served by the OpenCode Go Chat Completions endpoint,
-        // not the regular Zen endpoint.
+      if (config.providerModel.startsWith("glm-5.3")) {
+        // GLM-5.3 models are served by the OpenCode Go Chat Completions
+        // endpoint, not the regular Zen endpoint.
         return getOpenCodeGoProvider();
       }
       if (!openCodeZenProvider) {

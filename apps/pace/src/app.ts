@@ -163,7 +163,7 @@ let cycleModelSelections: ModelSelection[] = [
   { modelId: "opencode/kimi-k3" },
   { modelId: "opencode/kimi-k2.7-code" },
   { modelId: "opencode/kimi-k2.6" },
-  { modelId: "opencode/glm-5.2" },
+  { modelId: "opencode/glm-5.3-flash" },
   { modelId: "opencode/claude-fable-5" },
   { modelId: "opencode/claude-opus-4-8" },
 ];
