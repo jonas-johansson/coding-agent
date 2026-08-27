@@ -193,7 +193,9 @@ export async function loadAgentBody(agent: AgentDefinition): Promise<string> {
  */
 export function formatAgentsForToolDescription(agents: AgentDefinition[]): string {
   if (agents.length === 0) return "";
-  return agents.map((a) => `- ${a.name}: ${a.description}`).join("\n");
+  return agents
+    .map((a) => `- ${a.name}: ${a.description.replace(/\s+/g, " ").trim()}`)
+    .join("\n");
 }
 
 /**

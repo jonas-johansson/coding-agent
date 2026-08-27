@@ -162,6 +162,14 @@ export async function loadSkillContent(skill: Skill): Promise<string> {
 // ── Formatting ───────────────────────────────────────────────────────────────
 
 /**
+ * Collapse whitespace runs (including newlines from multi-line descriptions)
+ * into single spaces so each description stays on one line.
+ */
+function toSingleLine(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+/**
  * Build the <available_skills> XML block for the system prompt.
  * Only includes model-visible skills.
  */
@@ -170,7 +178,7 @@ export function formatSkillsSystemPromptBlock(skills: Skill[]): string {
   if (visible.length === 0) return "";
 
   const lines = visible.map(
-    (s) => `<skill name="${s.name}">${s.description}</skill>`,
+    (s) => `<skill name="${s.name}">${toSingleLine(s.description)}</skill>`,
   );
   return `<available_skills>\n${lines.join("\n")}\n</available_skills>`;
 }
@@ -211,5 +219,5 @@ export function formatSkillsListing(skills: Skill[]): string {
 export function formatSkillsForToolDescription(skills: Skill[]): string {
   const visible = getModelVisibleSkills(skills);
   if (visible.length === 0) return "";
-  return visible.map((s) => `- ${s.name}: ${s.description}`).join("\n");
+  return visible.map((s) => `- ${s.name}: ${toSingleLine(s.description)}`).join("\n");
 }

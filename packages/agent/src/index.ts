@@ -1,6 +1,7 @@
 export * from "./session";
 export * from "./skill";
 export * from "./agent";
+export * from "./frontmatter";
 export * from "./subagent";
 export * from "./loop";
 export * from "./tool";
