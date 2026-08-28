@@ -45,7 +45,7 @@ export type SubagentRunParams = {
   maxTurns?: number;
 };
 
-export const DEFAULT_MAX_SUBAGENT_TURNS = 50;
+export const DEFAULT_MAX_SUBAGENT_TURNS = 100;
 
 // ── Runner ───────────────────────────────────────────────────────────────────
 
