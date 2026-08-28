@@ -1808,7 +1808,8 @@ async function prompt(
       providerOptions: {
         ...(modelConfig.providerOptions ?? {}),
         ...(modelVariant?.providerOptions ?? {}),
-        ...((modelConfig.provider === "opencode" || modelConfig.provider === "fireworks")
+        ...((modelConfig.provider === "opencode" || modelConfig.provider === "fireworks"
+          || modelConfig.provider === "friendli")
           && { supportsImages: modelConfig.supportsImages }),
       },
       signal,

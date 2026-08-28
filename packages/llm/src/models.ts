@@ -2,7 +2,7 @@
  * Model metadata and provider-qualified model id helpers.
  */
 
-export type ProviderId = "anthropic" | "opencode" | "openai" | "fireworks" | "lmstudio";
+export type ProviderId = "anthropic" | "opencode" | "openai" | "fireworks" | "friendli" | "lmstudio";
 
 export type PricingConfig = {
   inputPerMTok: number;
@@ -477,6 +477,19 @@ export const MODEL_METADATA: Record<string, ModelMetadata> = {
       outputPerMTok: 0.50,
     },
   },
+  "friendli/glm-5.3-flash": {
+    contextWindow: 1_048_576,
+    maxOutputTokens: 1_048_576,
+    supportsImages: true,
+    providerModel: "zai-org/GLM-5.3-Flash",
+    variants: GLM_5_3_FLASH_REASONING_VARIANTS,
+    pricing: {
+      inputPerMTok: 0.15,
+      cacheWritePerMTok: 0,
+      cacheReadPerMTok: 0.03,
+      outputPerMTok: 0.50,
+    },
+  },
   "fireworks/kimi-k2.6": {
     contextWindow: 262_144,
     maxOutputTokens: 32_000,
@@ -589,6 +602,7 @@ const PROVIDER_IDS = new Set<ProviderId>([
   "opencode",
   "openai",
   "fireworks",
+  "friendli",
   "lmstudio",
 ]);
 
@@ -626,6 +640,12 @@ const DEFAULT_MODEL_METADATA_BY_PROVIDER: Record<ProviderId, ModelMetadata> = {
     pricing: ZERO_PRICING,
   },
   fireworks: {
+    contextWindow: 128_000,
+    maxOutputTokens: 16_000,
+    supportsImages: true,
+    pricing: ZERO_PRICING,
+  },
+  friendli: {
     contextWindow: 128_000,
     maxOutputTokens: 16_000,
     supportsImages: true,

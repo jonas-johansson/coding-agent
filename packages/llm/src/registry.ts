@@ -18,6 +18,7 @@ let openCodeZenAnthropicProvider: Provider | undefined;
 let openCodeZenOpenAIProvider: Provider | undefined;
 let openAIProvider: Provider | undefined;
 let fireworksProvider: Provider | undefined;
+let friendliProvider: Provider | undefined;
 let lmStudioProvider: Provider | undefined;
 
 async function getOpenCodeGoProvider(): Promise<Provider> {
@@ -123,6 +124,13 @@ export async function resolveProvider(config: ModelConfig): Promise<Provider> {
         fireworksProvider = new FireworksProvider();
       }
       return fireworksProvider;
+    }
+    case "friendli": {
+      if (!friendliProvider) {
+        const { FriendliProvider } = await import("./providers/friendli");
+        friendliProvider = new FriendliProvider();
+      }
+      return friendliProvider;
     }
     case "lmstudio": {
       if (!lmStudioProvider) {

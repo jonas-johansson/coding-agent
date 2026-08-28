@@ -26,6 +26,7 @@ export ANTHROPIC_API_KEY=sk-ant-...    # anthropic/* models
 export OPENAI_API_KEY=sk-...           # openai/* models
 export OPENCODE_ZEN_API_KEY=...        # opencode/* models via OpenCode Zen
 export FIREWORKS_API_KEY=...           # fireworks/* models
+export FRIENDLI_API_KEY=...            # friendli/* models
 ```
 
 ## Features
@@ -76,6 +77,7 @@ Pace ships with a curated built-in model catalog and also loads new models from 
 | `opencode/glm-5.3-flash` |
 | `fireworks/kimi-k2.6` |
 | `fireworks/kimi-k2.7-code` |
+| `friendli/glm-5.3-flash` |
 | `opencode/gpt-5.5` |
 | `openai/gpt-5.5` |
 | `lmstudio/google/gemma-4-12b` |
@@ -264,7 +266,7 @@ apps/pace       →  @pace/agent  →  @pace/llm
 | `src/providers/anthropic.ts` | Anthropic Messages API provider |
 | `src/providers/openai.ts` | OpenAI Responses API provider |
 | `src/providers/openai-compatible.ts` | Shared Chat Completions/responses implementation for OpenAI-compatible endpoints |
-| `src/providers/{opencode-zen,fireworks,lmstudio}.ts` | Thin configurations of the shared OpenAI-compatible provider |
+| `src/providers/{opencode-zen,fireworks,friendli,lmstudio}.ts` | Thin configurations of the shared OpenAI-compatible provider |
 | `src/registry.ts` | `resolveProvider()` model-to-provider routing with lazy instantiation |
 | `src/models.ts`, `src/model-catalog.ts` | Built-in model catalog plus remote refresh from models.dev |
 | `src/events.ts`, `src/fetch-retry.ts` | Typed event bus and fetch retry/backoff |
