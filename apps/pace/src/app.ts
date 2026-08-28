@@ -1681,6 +1681,9 @@ async function prompt(
   // Update the agent tool with the current set of agents
   setCurrentAgents(agents);
 
+  // Skills section shared by the main prompt and the subagent prompts below.
+  const skillsSection = formatSkillsSystemPromptBlock(skills);
+
   // Inject the subagent runtime into the agent tool. The closure owns the
   // provider, model, system prompt, and cost wiring because those live here.
   setAgentRuntime({
@@ -1690,11 +1693,17 @@ async function prompt(
         : currentModelConfig();
       const provider = await resolveProvider(modelConfig);
       const body = await loadAgentBody(agent);
+      const subagentTools = filterToolsForAgent(agent);
 
       const system = [
         `You are ${agent.name}, a subagent of the Pace coding agent. You work in an isolated context window and do not see the main conversation. Complete the task you are given. Work autonomously with your tools. When you are done, return a concise final report with the key results and any important file paths.`,
         `Current working directory: ${formatCwd(process.cwd())}`,
         `Current date (YYYY-MM-DD): ${new Date().toISOString().split("T")[0]}`,
+        // Same skills section as the main prompt, but only when this agent
+        // can actually load skills (explicit tools lists may exclude it).
+        ...(skillsSection && subagentTools.some((t) => t.name === "skill")
+          ? [skillsSection]
+          : []),
         ...(globalAgentsFileContents
           ? [`# Global instructions (from ~/.config/pace/AGENTS.md)\n\n${globalAgentsFileContents}`]
           : []),
@@ -1707,8 +1716,8 @@ async function prompt(
       return runSubagent({
         system,
         task,
-        tools: filterToolsForAgent(agent),
-        toolDefs: toProviderToolDefinitions(filterToolsForAgent(agent)),
+        tools: subagentTools,
+        toolDefs: toProviderToolDefinitions(subagentTools),
         provider,
         modelConfig,
         signal,
@@ -1728,10 +1737,9 @@ async function prompt(
   const baseSystem = `You are Pace, a highly capable coding agent designed to assist with software development tasks.\n\nCurrent working directory: ${formatCwd(process.cwd())}\n\nCurrent date (YYYY-MM-DD): ${new Date().toISOString().split("T")[0]}\n\nWhen operating on files or directories in the current working directory, use relative paths rather than absolute paths.\n\nWhen listing files, use \`/bin/ls -1\` to show only filenames (one per line, no icons or extra info). Only add flags like \`-la\` if the user explicitly asks for more details.\n\nWhen searching files with Bash, prefer \`rg\`/\`rg --files\` over \`grep -R\`, \`find .\`, or \`ls -R\` because ripgrep respects \`.gitignore\`; do not run unbounded recursive searches, and if \`rg\` is unavailable explicitly exclude \`node_modules\`, \`.git\`, \`dist\`, \`build\`, \`coverage\`, \`.next\`, and \`vendor\`.`;
 
   // Build system text: base → skills → MCP → AGENTS.md
-  const skillsBlock = formatSkillsSystemPromptBlock(skills);
   let systemText = baseSystem;
-  if (skillsBlock) {
-    systemText += `\n\n---\n\n${skillsBlock}`;
+  if (skillsSection) {
+    systemText += `\n\n---\n\n${skillsSection}`;
   }
 
   // Mention active MCP servers so the model knows they're available

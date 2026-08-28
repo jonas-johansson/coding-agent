@@ -170,8 +170,9 @@ function toSingleLine(text: string): string {
 }
 
 /**
- * Build the <available_skills> XML block for the system prompt.
- * Only includes model-visible skills.
+ * Build the skills section for the system prompt: the <available_skills> XML
+ * block (model-visible skills only) followed by the invocation directive that
+ * tells the model to check for a matching skill before starting work.
  */
 export function formatSkillsSystemPromptBlock(skills: Skill[]): string {
   const visible = getModelVisibleSkills(skills);
@@ -180,7 +181,13 @@ export function formatSkillsSystemPromptBlock(skills: Skill[]): string {
   const lines = visible.map(
     (s) => `<skill name="${s.name}">${toSingleLine(s.description)}</skill>`,
   );
-  return `<available_skills>\n${lines.join("\n")}\n</available_skills>`;
+  return (
+    `<available_skills>\n${lines.join("\n")}\n</available_skills>\n\n` +
+    "Skills are established workflows. Before starting a task, check whether " +
+    "it matches a skill above — each description lists its trigger phrases. " +
+    "If one matches, load it with the skill tool before doing anything else " +
+    "and follow it instead of improvising an equivalent."
+  );
 }
 
 /**
