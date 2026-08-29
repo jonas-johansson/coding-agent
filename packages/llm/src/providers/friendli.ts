@@ -27,6 +27,8 @@ export class FriendliProvider extends OpenAiCompatibleProvider {
         "Missing API key for Friendli AI. Set the FRIENDLI_API_KEY environment variable.",
       baseUrl: process.env.FRIENDLI_BASE_URL ?? DEFAULT_BASE_URL,
       mapModel: (model) => FRIENDLI_MODEL_MAP[model] ?? model,
+      // Friendli rejects prompts containing more than 8 images.
+      maxImages: 8,
       // Friendli separates reasoning from answer text into
       // `reasoning_content` when parsing is enabled.
       defaultBody: {

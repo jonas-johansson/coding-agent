@@ -17,6 +17,7 @@ import type {
   ProviderResponse,
   ProviderMessage,
   ContentBlock,
+  ToolResultPart,
   StreamEvent,
   ToolDefinition,
   UsageInfo,
@@ -43,6 +44,12 @@ export type OpenAiCompatibleProviderOptions = {
   /** Retry transient failures (429s, connection resets) with backoff. */
   useFetchRetry?: boolean;
   extraHeaders?: Record<string, string>;
+  /**
+   * Maximum number of images accepted per request. When set, only the most
+   * recent `maxImages` images are sent; older ones (in history or tool
+   * results) are replaced with text placeholders.
+   */
+  maxImages?: number;
 };
 
 // ── OpenAI-compatible types (minimal) ────────────────────────────────────────
@@ -145,6 +152,65 @@ type OaiResponseStreamEvent = {
 };
 
 // ── Message translation ─────────────────────────────────────────────────────
+
+/**
+ * Enforce a provider's per-request image limit by keeping only the most
+ * recent `max` images and replacing older ones with text placeholders.
+ * Applies to standalone image blocks and images inside tool results.
+ */
+export function limitImages(messages: ProviderMessage[], max: number): ProviderMessage[] {
+  let total = 0;
+  for (const msg of messages) {
+    if (msg.role !== "user") continue;
+    for (const block of msg.content) {
+      if (block.type === "image") {
+        total++;
+      } else if (block.type === "tool_result") {
+        total += block.content.filter((p) => p.type === "image").length;
+      }
+    }
+  }
+  if (total <= max) return messages;
+
+  let keep = max;
+  const limited: ProviderMessage[] = messages.map((msg) =>
+    msg.role === "user"
+      ? { role: "user" as const, content: [...msg.content] }
+      : { ...msg, content: [...msg.content] },
+  );
+
+  // Walk from newest to oldest so the most recent images are preserved.
+  for (let i = limited.length - 1; i >= 0; i--) {
+    const msg = limited[i];
+    if (msg.role !== "user") continue;
+
+    for (let j = msg.content.length - 1; j >= 0; j--) {
+      const block = msg.content[j];
+
+      if (block.type === "image") {
+        if (keep > 0) {
+          keep--;
+        } else {
+          msg.content[j] = { type: "text", text: `[Image omitted: ${block.mediaType}]` };
+        }
+      } else if (block.type === "tool_result") {
+        const newParts: ToolResultPart[] = [];
+        for (let k = block.content.length - 1; k >= 0; k--) {
+          const part = block.content[k];
+          if (part.type === "image" && keep <= 0) {
+            newParts.unshift({ type: "text", text: `[Image omitted: ${part.mediaType}]` });
+          } else {
+            if (part.type === "image") keep--;
+            newParts.unshift(part);
+          }
+        }
+        msg.content[j] = { ...block, content: newParts };
+      }
+    }
+  }
+
+  return limited;
+}
 
 function toOaiMessages(
   system: string,
@@ -485,11 +551,15 @@ export class OpenAiCompatibleProvider implements Provider {
     const model = options.mapModel ? options.mapModel(params.model) : params.model;
     const endpoint = apiStyle === "responses" ? "responses" : "chat/completions";
 
+    const messages = options.maxImages !== undefined
+      ? limitImages(params.messages, options.maxImages)
+      : params.messages;
+
     const body = apiStyle === "responses"
       ? {
           ...options.defaultBody,
           model,
-          input: toResponsesInput(params.system, params.messages, supportsImages),
+          input: toResponsesInput(params.system, messages, supportsImages),
           tools: toResponsesTools(params.tools),
           max_output_tokens: params.maxTokens,
           stream: true,
@@ -498,7 +568,7 @@ export class OpenAiCompatibleProvider implements Provider {
       : {
           ...options.defaultBody,
           model,
-          messages: toOaiMessages(params.system, params.messages, supportsImages, options.providerId),
+          messages: toOaiMessages(params.system, messages, supportsImages, options.providerId),
           tools: toOaiTools(params.tools),
           max_tokens: params.maxTokens,
           stream: true,
