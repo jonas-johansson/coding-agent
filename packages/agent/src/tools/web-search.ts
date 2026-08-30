@@ -9,14 +9,23 @@ const MAX_RETRIES = 6;
 const BASE_DELAY_MS = 1000;
 const MAX_DELAY_MS = 30000;
 
-// Exa reports rate limits as JSON-RPC errors inside a 200 response, so the
-// HTTP-level 429 retry in fetchWithRetry never triggers for those. We detect
-// rate-limit errors in the MCP payload (or a non-429 "429" status string) and
-// retry the whole request ourselves.
-function isRateLimitError(data: unknown): boolean {
-  const message =
-    (data as { error?: { message?: string } } | null)?.error?.message ?? "";
-  return /rate.?limit|too many requests|\b429\b/i.test(message);
+// Exa reports rate limits either as JSON-RPC errors inside a 200 response or,
+// worse, as a *successful* MCP result whose content text says the free MCP
+// rate limit was hit. The HTTP-level 429 retry in fetchWithRetry never
+// triggers for either, so we detect both shapes and retry the whole request.
+function rateLimitMessage(data: {
+  error?: { message?: string };
+  result?: { content?: Array<{ text?: string }> };
+}): string | null {
+  const error = data.error?.message ?? "";
+  if (error && /rate.?limit|too many requests|\b429\b/i.test(error)) {
+    return error;
+  }
+  const content = data.result?.content?.[0]?.text ?? "";
+  if (/rate.?limit|too many requests|\b429\b/i.test(content)) {
+    return content;
+  }
+  return null;
 }
 
 function parseSsePayload(text: string): unknown {
@@ -95,19 +104,21 @@ export const webSearchTool = defineTool({
         result?: { content?: Array<{ text?: string }> };
       };
 
-      if (data.error && !isRateLimitError(data)) {
+      const rateLimitMsg = rateLimitMessage(data);
+
+      if (data.error && !rateLimitMsg) {
         throw new Error(data.error.message ?? "Exa MCP request failed");
       }
 
-      if (data.error && attempt >= MAX_RETRIES) {
+      if (rateLimitMsg && attempt >= MAX_RETRIES) {
         throw new Error(
           `Exa rate limit persisted after ${MAX_RETRIES} retries with exponential backoff: ` +
-            (data.error.message ?? "rate limited") +
+            rateLimitMsg.slice(0, 200) +
             " — try again in a moment.",
         );
       }
 
-      if (data.error) {
+      if (rateLimitMsg) {
         const waitMs =
           Math.min(MAX_DELAY_MS, BASE_DELAY_MS * Math.pow(2, attempt)) +
           Math.random() * 1000;
