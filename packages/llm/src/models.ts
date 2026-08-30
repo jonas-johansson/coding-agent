@@ -490,6 +490,30 @@ export const MODEL_METADATA: Record<string, ModelMetadata> = {
       outputPerMTok: 0.50,
     },
   },
+  "fireworks/glm-5.3": {
+    contextWindow: 1_000_000,
+    maxOutputTokens: 131_072,
+    supportsImages: false,
+    variants: GLM_5_2_REASONING_VARIANTS,
+    pricing: {
+      inputPerMTok: 1.40,
+      cacheWritePerMTok: 0,
+      cacheReadPerMTok: 0.26,
+      outputPerMTok: 4.40,
+    },
+  },
+  "fireworks/glm-5.3-flash": {
+    contextWindow: 1_000_000,
+    maxOutputTokens: 131_072,
+    supportsImages: true,
+    variants: GLM_5_3_FLASH_REASONING_VARIANTS,
+    pricing: {
+      inputPerMTok: 0.15,
+      cacheWritePerMTok: 0,
+      cacheReadPerMTok: 0.029,
+      outputPerMTok: 0.50,
+    },
+  },
   "fireworks/kimi-k2.6": {
     contextWindow: 262_144,
     maxOutputTokens: 32_000,

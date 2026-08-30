@@ -17,6 +17,8 @@ const DEFAULT_BASE_URL = "https://api.fireworks.ai/inference/v1";
 const FIREWORKS_MODEL_MAP: Record<string, string> = {
   "kimi-k2.6": "accounts/fireworks/models/kimi-k2p6",
   "kimi-k2.7-code": "accounts/fireworks/models/kimi-k2p7-code",
+  "glm-5.3-flash": "accounts/fireworks/models/glm-5p3-flash",
+  "glm-5.3": "accounts/fireworks/models/glm-5p3",
 };
 
 export class FireworksProvider extends OpenAiCompatibleProvider {
