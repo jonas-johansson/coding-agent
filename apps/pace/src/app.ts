@@ -1999,6 +1999,21 @@ async function prompt(
         }));
       },
 
+      onToolResult: (executed) => {
+        // Per-tool UI flip so parallel tools finish their spinner
+        // independently. Persistence and cost stay in onToolResults.
+        runningToolUseIds.delete(executed.result.tool_use_id);
+        streamedToolContentByTool.delete(executed.result.tool_use_id);
+
+        const blockId = toolBlocks.get(executed.result.tool_use_id);
+        if (blockId !== undefined) {
+          tui.updateBlock(blockId, {
+            content: executed.display,
+            state: executed.result.is_error ? "error" : "done",
+          });
+        }
+      },
+
       onToolResults: (executedTools) => {
         for (const executed of executedTools) {
           runningToolUseIds.delete(executed.result.tool_use_id);

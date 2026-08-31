@@ -95,6 +95,12 @@ export type AgentLoopParams = {
    * On cancellation, unexecuted calls receive synthesized error results.
    */
   onToolResults?: (executed: ExecutedTool[]) => void;
+  /**
+   * Called as soon as each individual tool call finishes, even while other
+   * parallel calls from the same assistant message are still running. Use
+   * this for per-tool UI updates; persistence should use onToolResults.
+   */
+  onToolResult?: (executed: ExecutedTool) => void;
 };
 
 // ── Tool execution ───────────────────────────────────────────────────────────
@@ -244,6 +250,7 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
           }),
         });
         completed.set(block.id, executed);
+        params.onToolResult?.(executed);
         return executed;
       };
 
