@@ -33,6 +33,7 @@ export * from "./core";
 export { truncateToolOutputIfNeeded } from "./output";
 export { setCurrentSkills };
 export { setCurrentAgents, setAgentRuntime, filterToolsForAgent };
+export type { AgentRuntime } from "./agent";
 
 /**
  * Augment a tool's description with dynamic listings (skills, agents).

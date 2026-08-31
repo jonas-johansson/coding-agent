@@ -44,11 +44,9 @@ import {
   truncateToolOutputIfNeeded,
   isAbortError,
   getProviderToolDefinitions,
-  toProviderToolDefinitions,
   setCurrentSkills,
   setCurrentAgents,
   setAgentRuntime,
-  filterToolsForAgent,
 } from "@pace/agent";
 import {
   discoverSkills,
@@ -60,9 +58,8 @@ import {
 import {
   discoverAgents,
   formatAgentsListing,
-  loadAgentBody,
 } from "@pace/agent";
-import { runAgentLoop, runSubagent } from "@pace/agent";
+import { runAgentLoop } from "@pace/agent";
 import type {
   ProviderStream,
   ContentBlock as ProviderContentBlock,
@@ -87,6 +84,21 @@ import { readClipboardImage, type SupportedImageMediaType } from "./clipboard";
 import { sendDesktopNotification } from "./notify";
 import { onEvent, resolveProvider } from "@pace/llm";
 import { loadPaceConfig, DEFAULT_COST_DISPLAY_CONFIG, type CostDisplayConfig } from "./config";
+import {
+  assembleSystemText,
+  computeCallCost,
+  formatCwd,
+  loadAgentsFile,
+  loadGlobalAgentsFile,
+  makeSubagentRuntime,
+} from "./agent-context";
+import {
+  MAX_REQUEST_BYTES,
+  REQUEST_IMAGE_PAYLOAD_WARNING_RATIO,
+  capProviderMessageImages,
+  estimateBase64Size,
+} from "./image-cap";
+import { runHeadless } from "./headless";
 import { resolveTheme } from "./themes";
 import { setTuiTheme } from "./tui";
 import { setShikiTheme } from "./syntax";
@@ -102,39 +114,6 @@ import {
   formatMcpListing,
   getConnectedMcpServers,
 } from "@pace/agent";
-
-/**
- * Attempts to read AGENTS.md from the current working directory.
- * Returns the file contents as a string, or null if the file does not exist.
- */
-async function loadAgentsFile(): Promise<string | null> {
-  try {
-    const filePath = join(process.cwd(), "AGENTS.md");
-    const contents = await readFile(filePath, "utf-8");
-    return contents;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Attempts to read the global AGENTS.md from ~/.config/pace/AGENTS.md.
- * Returns the file contents as a string, or null if the file does not exist.
- */
-async function loadGlobalAgentsFile(): Promise<string | null> {
-  try {
-    const filePath = join(homedir(), ".config", "pace", "AGENTS.md");
-    const contents = await readFile(filePath, "utf-8");
-    return contents;
-  } catch {
-    return null;
-  }
-}
-
-function formatCwd(cwd: string): string {
-  const home = homedir();
-  return cwd.startsWith(home) ? "~" + cwd.slice(home.length) : cwd;
-}
 
 async function getProjectFiles(): Promise<string[]> {
   const { exec } = await import("child_process");
@@ -380,10 +359,6 @@ let pasteInFlight = false;
 /** Maximum raw bytes per image (Anthropic binding constraint). */
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
-/** Anthropic total request limit in bytes. */
-const MAX_REQUEST_BYTES = 10 * 1024 * 1024;
-const REQUEST_IMAGE_PAYLOAD_WARNING_RATIO = 0.8;
-
 /** Image file extensions we recognize. */
 const IMAGE_EXTENSIONS: Record<string, SupportedImageMediaType> = {
   ".jpg": "image/jpeg",
@@ -402,107 +377,11 @@ const BARE_IMAGE_PATH_PATTERN = /(?:^|\s)((?:\.{0,2}\/|~\/)[^\s]+\.(?:jpg|jpeg|p
 /** Pattern matching @filename references (e.g. @file.txt, @src/foo.ts). */
 const FILE_REF_PATTERN = /@([\w./\-]+\.\w+)/g;
 
-function estimateBase64Size(rawBytes: number): number {
-  return Math.ceil(rawBytes / 3) * 4;
-}
-
 function expandHomePath(p: string): string {
   if (p.startsWith("~/") || p === "~") {
     return join(homedir(), p.slice(1));
   }
   return p;
-}
-
-const OMITTED_IMAGE_PLACEHOLDER = "[older image omitted to keep the provider request under the size limit]";
-
-type ImageCapResult = {
-  messages: ProviderMessage[];
-  droppedImages: number;
-  droppedBytes: number;
-};
-
-/**
- * Keep newest images within a base64 byte budget, replacing older images with
- * text placeholders. This is non-destructive: saved session history keeps the
- * original image data for UI/history, while outbound provider requests avoid
- * accumulating screenshots forever.
- */
-function capProviderMessageImages(messages: readonly ProviderMessage[], budgetBytes: number): ImageCapResult {
-  const imagesToDrop = new Set<ImageBlock>();
-  let keptBytes = 0;
-  let droppedBytes = 0;
-
-  for (let msgIndex = messages.length - 1; msgIndex >= 0; msgIndex--) {
-    const msg = messages[msgIndex];
-    if (msg.role !== "user") {
-      continue;
-    }
-
-    for (let blockIndex = msg.content.length - 1; blockIndex >= 0; blockIndex--) {
-      const block = msg.content[blockIndex];
-      if (block.type === "image") {
-        if (keptBytes + block.data.length <= budgetBytes) {
-          keptBytes += block.data.length;
-        } else {
-          imagesToDrop.add(block);
-          droppedBytes += block.data.length;
-        }
-      } else if (block.type === "tool_result") {
-        for (let partIndex = block.content.length - 1; partIndex >= 0; partIndex--) {
-          const part = block.content[partIndex];
-          if (part.type !== "image") {
-            continue;
-          }
-          if (keptBytes + part.data.length <= budgetBytes) {
-            keptBytes += part.data.length;
-          } else {
-            imagesToDrop.add(part);
-            droppedBytes += part.data.length;
-          }
-        }
-      }
-    }
-  }
-
-  if (imagesToDrop.size === 0) {
-    return { messages: [...messages], droppedImages: 0, droppedBytes: 0 };
-  }
-
-  const cappedMessages = messages.map((msg): ProviderMessage => {
-    if (msg.role !== "user") {
-      return msg;
-    }
-
-    let changed = false;
-    const content = msg.content.map((block) => {
-      if (block.type === "image" && imagesToDrop.has(block)) {
-        changed = true;
-        return { type: "text" as const, text: OMITTED_IMAGE_PLACEHOLDER };
-      }
-
-      if (block.type === "tool_result") {
-        let toolResultChanged = false;
-        const toolResultContent = block.content.map((part) => {
-          if (part.type === "image" && imagesToDrop.has(part)) {
-            toolResultChanged = true;
-            return { type: "text" as const, text: OMITTED_IMAGE_PLACEHOLDER };
-          }
-          return part;
-        });
-
-        if (toolResultChanged) {
-          changed = true;
-          return { ...block, content: toolResultContent };
-        }
-      }
-
-      return block;
-    });
-
-    return changed ? { ...msg, content } : msg;
-  });
-
-  return { messages: cappedMessages, droppedImages: imagesToDrop.size, droppedBytes };
 }
 
 /** Estimate total pending + new image payload in base64 bytes. */
@@ -517,26 +396,6 @@ function estimatePendingImagePayload(): number {
 function mimeFromExtension(filePath: string): SupportedImageMediaType | null {
   const ext = extname(filePath).toLowerCase();
   return IMAGE_EXTENSIONS[ext] ?? null;
-}
-
-function computeCallCost(
-  config: ModelConfig,
-  totalInputTokens: number,
-  inputTokens: number,
-  cacheCreationTokens: number,
-  cacheReadTokens: number,
-  outputTokens: number,
-): number {
-  const pricing = config.longContextPricing && totalInputTokens > config.longContextPricing.inputTokenThreshold
-    ? config.longContextPricing.pricing
-    : config.pricing;
-
-  return (
-    (inputTokens / 1_000_000) * pricing.inputPerMTok +
-    (cacheCreationTokens / 1_000_000) * pricing.cacheWritePerMTok +
-    (cacheReadTokens / 1_000_000) * pricing.cacheReadPerMTok +
-    (outputTokens / 1_000_000) * pricing.outputPerMTok
-  );
 }
 
 function updateContextInfo() {
@@ -1684,82 +1543,24 @@ async function prompt(
   // Skills section shared by the main prompt and the subagent prompts below.
   const skillsSection = formatSkillsSystemPromptBlock(skills);
 
-  // Inject the subagent runtime into the agent tool. The closure owns the
+  // Inject the subagent runtime into the agent tool. The runtime owns the
   // provider, model, system prompt, and cost wiring because those live here.
-  setAgentRuntime({
-    run: async ({ agent, task, signal, onProgress }) => {
-      const modelConfig = agent.model !== undefined
-        ? (getModelConfig(agent.model) ?? currentModelConfig())
-        : currentModelConfig();
-      const provider = await resolveProvider(modelConfig);
-      const body = await loadAgentBody(agent);
-      const subagentTools = filterToolsForAgent(agent);
-
-      const system = [
-        `You are ${agent.name}, a subagent of the Pace coding agent. You work in an isolated context window and do not see the main conversation. Complete the task you are given. Work autonomously with your tools. When you are done, return a concise final report with the key results and any important file paths.`,
-        `Current working directory: ${formatCwd(process.cwd())}`,
-        `Current date (YYYY-MM-DD): ${new Date().toISOString().split("T")[0]}`,
-        // Same skills section as the main prompt, but only when this agent
-        // can actually load skills (explicit tools lists may exclude it).
-        ...(skillsSection && subagentTools.some((t) => t.name === "skill")
-          ? [skillsSection]
-          : []),
-        ...(globalAgentsFileContents
-          ? [`# Global instructions (from ~/.config/pace/AGENTS.md)\n\n${globalAgentsFileContents}`]
-          : []),
-        ...(agentsFileContents
-          ? [`# Project-specific instructions (from AGENTS.md)\n\n${agentsFileContents}`]
-          : []),
-        body,
-      ].join("\n\n---\n\n");
-
-      return runSubagent({
-        system,
-        task,
-        tools: subagentTools,
-        toolDefs: toProviderToolDefinitions(subagentTools),
-        provider,
-        modelConfig,
-        signal,
-        onProgress,
-        onUsage: (usage) => computeCallCost(
-          modelConfig,
-          usage.inputTokens,
-          usage.inputTokens - usage.cacheCreationTokens - usage.cacheReadTokens,
-          usage.cacheCreationTokens,
-          usage.cacheReadTokens,
-          usage.outputTokens,
-        ),
-      });
+  setAgentRuntime(makeSubagentRuntime(
+    {
+      resolveModelConfig: (modelId) =>
+        (modelId !== undefined ? getModelConfig(modelId) : undefined) ?? currentModelConfig(),
     },
-  });
-
-  const baseSystem = `You are Pace, a highly capable coding agent designed to assist with software development tasks.\n\nCurrent working directory: ${formatCwd(process.cwd())}\n\nCurrent date (YYYY-MM-DD): ${new Date().toISOString().split("T")[0]}\n\nWhen operating on files or directories in the current working directory, use relative paths rather than absolute paths.\n\nWhen listing files, use \`/bin/ls -1\` to show only filenames (one per line, no icons or extra info). Only add flags like \`-la\` if the user explicitly asks for more details.\n\nWhen searching files with Bash, prefer \`rg\`/\`rg --files\` over \`grep -R\`, \`find .\`, or \`ls -R\` because ripgrep respects \`.gitignore\`; do not run unbounded recursive searches, and if \`rg\` is unavailable explicitly exclude \`node_modules\`, \`.git\`, \`dist\`, \`build\`, \`coverage\`, \`.next\`, and \`vendor\`.`;
+    { skillsSection, globalAgentsFileContents, agentsFileContents },
+  ));
 
   // Build system text: base → skills → MCP → AGENTS.md
-  let systemText = baseSystem;
-  if (skillsSection) {
-    systemText += `\n\n---\n\n${skillsSection}`;
-  }
-
-  // Mention active MCP servers so the model knows they're available
-  const mcpServers = getConnectedMcpServers();
-  if (mcpServers.length > 0) {
-    const mcpLines = mcpServers.map(
-      (s) => `  - ${s.name} (${s.tools.length} tool${s.tools.length === 1 ? "" : "s"})`,
-    );
-    systemText +=
-      `\n\n---\n\nAvailable MCP servers:\n${mcpLines.join("\n")}\n\n` +
-      `MCP tools are named mcp__<server>__<tool>. Use them when they are relevant to the task.`;
-  }
-
-  if (globalAgentsFileContents) {
-    systemText += `\n\n---\n\n# Global instructions (from ~/.config/pace/AGENTS.md)\n\n${globalAgentsFileContents}`;
-  }
-
-  if (agentsFileContents) {
-    systemText += `\n\n---\n\n# Project-specific instructions (from AGENTS.md)\n\n${agentsFileContents}`;
-  }
+  const systemText = assembleSystemText({
+    cwd: process.cwd(),
+    skillsSection: skillsSection || undefined,
+    mcpServers: getConnectedMcpServers(),
+    globalAgentsFileContents,
+    agentsFileContents,
+  });
 
   const modelConfig = currentModelConfig();
   const modelVariant = currentModelVariant();
@@ -2101,15 +1902,25 @@ async function prompt(
   }
 }
 
-function parseCliArgs(): { resume: boolean } {
+function parseCliArgs(): { resume: boolean; sessionId?: string } {
   // process.argv is [node, script, ...args]
   const args = process.argv.slice(2);
+  const sessionIdIndex = args.indexOf("--session-id");
+  const sessionId = sessionIdIndex !== -1 ? args[sessionIdIndex + 1] : undefined;
   return {
     resume: args.includes("--resume") || args.includes("-r"),
+    ...(sessionId !== undefined && { sessionId }),
   };
 }
 
 async function main() {
+  // `pace run ...` is the headless (non-interactive) mode. Dispatch it before
+  // any TUI startup so it stays fast and never touches the terminal UI.
+  if (process.argv[2] === "run") {
+    const exitCode = await runHeadless(process.argv.slice(3));
+    process.exit(exitCode);
+  }
+
   const cliArgs = parseCliArgs();
 
   // Resolve config + persisted preferences before the first render so the
@@ -2153,6 +1964,19 @@ async function main() {
       }
     } catch (error) {
       startupErrors.push({ title: "Resume session", content: formatError(error) });
+    }
+  }
+
+  // If --session-id was passed, load that specific session for this project.
+  if (cliArgs.sessionId !== undefined) {
+    try {
+      const session = await loadSession(createProjectKey(process.cwd()), cliArgs.sessionId);
+      activateSession(session);
+    } catch {
+      startupErrors.push({
+        title: "Resume session",
+        content: `No session with id ${cliArgs.sessionId} found for this project.`,
+      });
     }
   }
 

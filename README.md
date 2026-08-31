@@ -126,6 +126,37 @@ Model catalog environment variables:
 - **`@image(./path.png)`** — attach an image inline
 - Bare image paths like `./screenshot.png` are also auto-detected
 
+## Headless mode
+
+`pace run` executes the agent non-interactively with the same wiring as the TUI (AGENTS.md, skills, MCP, subagents, sessions). The prompt comes from an argument, `--prompt`, `--prompt-file`, or piped stdin.
+
+```sh
+pace run "Summarize this repo"                     # plain text to stdout
+pace run -p "fix the failing test" --model fireworks/glm-5.3:max
+cat prompt.txt | pace run --output-format json
+pace run --prompt-file task.md --output-format stream-json
+pace run --session <id> "continue where we left off"
+pace run --continue "what did we decide?"
+```
+
+Options:
+
+| Flag | Description |
+|---|---|
+| `-p, --prompt <text>` | Prompt text |
+| `--prompt-file <path>` | Read the prompt from a file |
+| `--session <id>` | Continue an existing session |
+| `--continue` | Continue the most recent session for this project |
+| `--model <id[:variant]>` | Model selection (falls back to config `defaultModel`) |
+| `--output-format <f>` | `text` (default), `json` (final result object), or `stream-json` (NDJSON events) |
+| `--max-turns <n>` | Cap assistant turns (exit code 2 when hit) |
+| `--append-system <text\|@file>` | Append extra system text |
+| `--steering-stdin` | Read NDJSON steering messages from stdin while running: `{"type":"steer","text":"..."}` |
+
+`stream-json` emits one JSON object per line: `system` (session id, model), `text_delta`, `reasoning_delta`, `tool_start` / `tool_input` / `tool_output` / `tool_content` / `tool_end`, `usage` (per assistant turn), and a final `result` (text, turns, usage, cost, stop reason). Exit codes: `0` finished, `1` error, `2` turn cap, `130` cancelled.
+
+Sessions created by `pace run` are normal Pace sessions: resume them in the TUI with `pace --session-id <id>`, or continue them headlessly with `--session <id>`.
+
 ## Configuration
 
 Pace reads global configuration from `~/.config/pace/config.json`.
