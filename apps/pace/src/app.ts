@@ -1209,12 +1209,7 @@ async function handleCommand(command: string): Promise<boolean> {
     }
     case "/sessions": {
       const sessions = await listSessions(process.cwd());
-      const sortedSessions = sessions.slice().sort((a, b) => {
-        if (a.starred && !b.starred) return -1;
-        if (!a.starred && b.starred) return 1;
-        return b.updatedAt.localeCompare(a.updatedAt);
-      });
-      tui.openSessionOverlay(sortedSessions.map((session) => ({
+      tui.openSessionOverlay(sessions.map((session) => ({
         id: session.id,
         updatedAt: session.updatedAt,
         entryCount: session.entryCount,
