@@ -86,8 +86,13 @@ export function formatReplacementDiff(input: ReplacementDiffInput): ReplacementD
   return { text, replacements: matches.length };
 }
 
+/** A diff hunk body: every line is context (leading space), removed, or added. */
+function looksLikeDiffHunk(diff: string): boolean {
+  return diff.split("\n").some((line) => line.startsWith("+") || line.startsWith("-"));
+}
+
 export function wrapDiffFence(diff: string): string {
-  if (!diff.startsWith("@@") && !diff.startsWith("…")) {
+  if (!looksLikeDiffHunk(diff) && !diff.startsWith("…")) {
     return diff;
   }
   return "```diff\n" + diff + "\n```";
@@ -235,13 +240,7 @@ function buildMatchHunk(
   const contextBeforeStart = Math.max(0, removedStartLine - CONTEXT_LINES);
   const contextAfterEnd = Math.min(oldMap.lines.length, Math.max(afterStart, 0) + CONTEXT_LINES);
 
-  const oldCount = (removedStartLine - contextBeforeStart) + removed.length + Math.max(0, contextAfterEnd - afterStart);
-  const newCount = (removedStartLine - contextBeforeStart) + added.length + Math.max(0, contextAfterEnd - afterStart);
-  const headerStart = contextBeforeStart + 1;
-
-  const rows: string[] = [
-    newCount !== oldCount ? `@@ ${headerStart},${oldCount} → ${newCount}` : `@@ ${headerStart},${oldCount}`,
-  ];
+  const rows: string[] = [];
 
   for (let i = contextBeforeStart; i < removedStartLine; i++) {
     rows.push(` ${oldMap.lines[i]}`);
