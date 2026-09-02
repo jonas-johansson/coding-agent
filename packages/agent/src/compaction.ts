@@ -173,11 +173,12 @@ export function planCompaction(
 
   if (!(budgetEntry.type === "user" && !budgetEntry.steering)) {
     // Prefer the nearest turn boundary (non-steering user entry) within 2×
-    // the budget.
+    // the budget. Index 0 is never a valid cut (it would summarize nothing),
+    // so a single-turn session falls back to the budget cut instead.
     for (let i = budgetCut - 1; i >= 0; i -= 1) {
       const entry = visible[i];
       if (entry.type === "user" && !entry.steering) {
-        if (suffix[i] <= maxKeptTokens) {
+        if (i > 0 && suffix[i] <= maxKeptTokens) {
           cutIndex = i;
         }
         break;

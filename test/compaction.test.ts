@@ -34,6 +34,7 @@ import {
   saveSession,
   summarizeForCompaction,
   createProjectKey,
+  type SessionEntry,
 } from "@pace/agent";
 
 // ── Entry helpers ────────────────────────────────────────────────────────────
@@ -159,6 +160,27 @@ test("planCompaction returns null when everything fits in the keep budget", () =
 
   assert.equal(planCompaction([u1, a1], { keepRecentTokens: 20_000 }), null);
   assert.equal(planCompaction([], {}), null);
+});
+
+test("planCompaction compacts a single-turn session instead of returning null", () => {
+  // One user request followed by a long tool tail: the only turn boundary is
+  // the first entry, which can never be a cut (nothing to summarize). The
+  // plan must fall back to the budget cut instead of returning null.
+  const u1 = userEntry(100);
+  const tail: SessionEntry[] = [];
+  for (let i = 0; i < 30; i += 1) {
+    tail.push(
+      assistantEntry(10, { id: `c${i}`, name: "read", input: { path: `f${i}` } }),
+      toolResultEntry(`c${i}`, 1_000),
+    );
+  }
+
+  const plan = planCompaction([u1, ...tail], { keepRecentTokens: 10_000 });
+
+  assert.ok(plan);
+  // The cut lands on the assistant of pair 20: 10 pairs (≈10.1k) stay verbatim.
+  assert.equal(plan.firstKeptEntryId, tail[40].id);
+  assert.equal(plan.messagesToSummarize.length, 41); // u1 + 20 tool-call pairs
 });
 
 test("planCompaction respects a prior compaction (operates on the visible range)", () => {
