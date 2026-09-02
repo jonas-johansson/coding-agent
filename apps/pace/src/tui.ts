@@ -89,12 +89,19 @@ export type TreeOverlayItem = {
   id: string;
   parentId: string | null;
   depth: number;
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "compaction";
   preview: string;
   isActive: boolean;
   isLeaf: boolean;
   hasChildren: boolean;
   timestamp: string;
+  /** Hidden behind a compaction summary (rendered dimmed). */
+  summarized?: boolean;
+  /** Folded by default (compaction summary ranges). */
+  startFolded?: boolean;
+  /** One of several children under its parent (connector glyph). */
+  isForkChild?: boolean;
+  isLastForkChild?: boolean;
 };
 
 /** Callbacks and data wiring for the conversation tree overlay. */
@@ -319,6 +326,7 @@ export class Tui {
   private treeOverlayIndex = 0;
   private treeOverlayScroll = 0;
   private treeOverlayItems: TreeOverlayItem[] = [];
+  private treeOverlayInContextCount: number | undefined = undefined;
   private treeOverlayExpanded = new Set<string>();
 
   constructor(private readonly options: { onSubmit?: SubmitHandler; onSteer?: (text: string) => void; onTab?: () => void; onShiftTab?: () => void; onCycleVariant?: () => void; onEscape?: () => void; onExit?: () => void | Promise<void>; onPasteImage?: () => void | Promise<void>; slashCommands?: SuggestionProvider; fileSuggestions?: FileSuggestionProvider; modelOverlay?: ModelOverlayOptions; mcpOverlay?: McpOverlayOptions; sessionOverlay?: SessionOverlayOptions; treeOverlay?: TreeOverlayOptions; model?: string; cwd?: string; gitBranch?: string } = {}) {
@@ -1919,10 +1927,13 @@ export class Tui {
 
   // ── Conversation tree overlay ──────────────────────────────────────────────
 
-  openTreeOverlay(items: TreeOverlayItem[]) {
+  openTreeOverlay(items: TreeOverlayItem[], inContextCount?: number) {
     this.treeOverlayActive = true;
     this.treeOverlayItems = items;
-    this.treeOverlayExpanded = new Set(items.filter((item) => item.hasChildren).map((item) => item.id));
+    this.treeOverlayInContextCount = inContextCount;
+    this.treeOverlayExpanded = new Set(
+      items.filter((item) => item.hasChildren && !item.startFolded).map((item) => item.id),
+    );
     const leafIndex = items.findIndex((item) => item.isLeaf);
     this.treeOverlayIndex = leafIndex >= 0 ? leafIndex : 0;
     this.treeOverlayScroll = 0;
@@ -2068,7 +2079,10 @@ export class Tui {
     this.treeOverlayAdjustScroll();
 
     const lines: string[] = [];
-    const title = `  Conversation tree  ·  ${visible.length} visible / ${this.treeOverlayItems.length} total`;
+    const inContext = this.treeOverlayInContextCount !== undefined
+      ? `  ·  ${this.treeOverlayInContextCount} in context`
+      : "";
+    const title = `  Conversation tree  ·  ${visible.length} visible / ${this.treeOverlayItems.length} total${inContext}`;
     lines.push(overlayChromeLine(`${BOLD}${fg(currentTheme.overlay.brightFg)}${title}`, columns));
     lines.push(overlayLine(`${fg(currentTheme.overlay.fg)}  ↑/↓ move  space fold/unfold  enter jump  esc close`, columns));
     lines.push(`${bg(currentTheme.overlay.bg)}${fg(240)}${"─".repeat(columns)}${RESET}`);
@@ -2102,13 +2116,20 @@ export class Tui {
   private renderTreeOverlayRow(item: TreeOverlayItem, isCursor: boolean, columns: number): string {
     const rowBg = isCursor ? currentTheme.overlay.selBg : currentTheme.overlay.bg;
     const baseFg = isCursor ? 255 : item.isActive ? 252 : 250;
-    const roleColor = item.role === "user" ? currentTheme.blocks.user.accent : currentTheme.blocks.assistant.accent;
+    const roleColor = item.role === "user"
+      ? currentTheme.blocks.user.accent
+      : item.role === "compaction"
+        ? 73
+        : currentTheme.blocks.assistant.accent;
+    // Summarized rows are hidden behind a compaction summary: dim them.
+    const previewFg = item.summarized && !isCursor ? 244 : roleColor;
     const indent = "  ".repeat(item.depth);
     const foldGlyph = item.hasChildren ? (this.treeOverlayExpanded.has(item.id) ? "⊟" : "⊞") : " ";
-    const roleGlyph = item.role === "user" ? ">" : "◇";
+    const connector = item.isForkChild ? (item.isLastForkChild ? "└" : "├") : " ";
+    const roleGlyph = item.role === "user" ? ">" : item.role === "compaction" ? "≡" : "◇";
     const activeMarker = item.isLeaf ? "← active" : item.isActive ? "●" : "";
 
-    const prefix = `${indent}${foldGlyph} ${roleGlyph} `;
+    const prefix = `${indent}${foldGlyph} ${connector} ${roleGlyph} `;
     const prefixWidth = displayWidth(prefix);
     const markerTextWidth = activeMarker ? displayWidth(activeMarker) : 0;
     const markerWidth = activeMarker ? 2 + markerTextWidth : 0;
@@ -2118,7 +2139,7 @@ export class Tui {
     const maxPreviewWidth = Math.max(1, columns - reserved);
     const preview = truncateToWidth(item.preview, maxPreviewWidth);
 
-    const content = `${fg(baseFg)}  ${prefix}${fg(roleColor)}${preview}${fg(baseFg)}${activeMarker ? `  ${activeMarker}` : ""}`;
+    const content = `${fg(baseFg)}  ${prefix}${fg(previewFg)}${preview}${fg(baseFg)}${activeMarker ? `  ${activeMarker}` : ""}`;
     const contentWidth = leftPadding + prefixWidth + displayWidth(preview) + markerWidth;
     const trailing = Math.max(0, columns - contentWidth);
 

@@ -24,6 +24,7 @@ import {
   createTurnDraft,
   createUserEntry,
   getActivePath,
+  getModelVisibleEntries,
   isTurnDraftEmpty,
   listSessions,
   loadSession,
@@ -334,7 +335,7 @@ const tui = new Tui({
         tui.addBlock({ role: "assistant", title: "Tree", content: "The current session is empty." });
         return;
       }
-      tui.openTreeOverlay(items);
+      tui.openTreeOverlay(items, modelVisibleEntryCount());
     },
   },
   model: DEFAULT_MODEL_ID,
@@ -911,6 +912,15 @@ async function compactContext(opts: {
   return entry;
 }
 
+/**
+ * Number of session entries the model currently sees: the kept tail after
+ * the last compaction plus everything appended after it. Shown in the tree
+ * overlay header ("N in context").
+ */
+function modelVisibleEntryCount(): number {
+  return getModelVisibleEntries(getActivePath(activeSession)).entries.length;
+}
+
 // ── Preference persistence ───────────────────────────────────────────────────
 
 function buildPreferences() {
@@ -1244,7 +1254,7 @@ async function handleCommand(command: string): Promise<boolean> {
         tui.addBlock({ role: "assistant", title: "Tree", content: "The current session is empty." });
         return true;
       }
-      tui.openTreeOverlay(items);
+      tui.openTreeOverlay(items, modelVisibleEntryCount());
       return true;
     }
     case "/undo": {
