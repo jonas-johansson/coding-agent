@@ -89,14 +89,15 @@ test("tree nests only branch alternatives under a fork", () => {
   const a1bRow = rows.find((row) => row.id === a1b.id);
   assert.equal(u1Row?.depth, 0);
   assert.equal(u1Row?.hasChildren, true);
-  // Only the inactive alternative indents; the active continuation stays on
-  // the flat timeline.
+  // Both alternatives line up beneath their shared parent, including the
+  // active continuation.
   assert.equal(a1Row?.depth, 1);
   assert.equal(a1Row?.isForkChild, true);
-  assert.equal(a1Row?.isLastForkChild, true);
+  assert.equal(a1Row?.isLastForkChild, undefined);
   assert.equal(a1Row?.isActive, false);
-  assert.equal(a1bRow?.depth, 0);
-  assert.equal(a1bRow?.isForkChild, undefined);
+  assert.equal(a1bRow?.depth, 1);
+  assert.equal(a1bRow?.isForkChild, true);
+  assert.equal(a1bRow?.isLastForkChild, true);
   assert.equal(a1bRow?.isLeaf, true);
 });
 

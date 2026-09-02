@@ -2118,8 +2118,10 @@ export class Tui {
         ? 73
         : currentTheme.blocks.assistant.accent;
     // Summarized rows are hidden behind a compaction summary, and inactive
-    // branch alternatives are de-emphasized: dim both.
-    const previewFg = (item.summarized || (item.isForkChild && !item.isActive)) && !isCursor
+    // branch alternatives are de-emphasized: dim both. User messages keep
+    // their accent — they were typed, not generated, so dimming them reads
+    // as lost rather than inactive.
+    const previewFg = (item.summarized || (item.isForkChild && !item.isActive && item.role !== "user")) && !isCursor
       ? 244
       : roleColor;
     const indent = "  ".repeat(item.depth);

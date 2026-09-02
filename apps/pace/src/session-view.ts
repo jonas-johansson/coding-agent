@@ -445,21 +445,25 @@ export function sessionToTreeOverlayEntries(session: Session): TreeOverlayEntry[
 
   function traverse(entry: TreeEntry, depth: number, summarized: boolean, forkChild: boolean, lastForkChild: boolean) {
     const children = sortEntries(childrenByParent.get(entry.id) ?? []);
-    // Branch alternatives: children that are not compaction summaries. The
-    // fork only indents the INACTIVE alternatives — the active continuation
-    // stays on the flat timeline so a branch point doesn't push the whole
-    // rest of the conversation into a nested level.
+    // Branch alternatives: children that are not compaction summaries. Every
+    // alternative is visually nested beneath the fork, including the active
+    // continuation, so sibling branches line up at the same depth.
     const alternatives = children.filter((child) => !summarizedIds.has(child.id));
     const fork = alternatives.length >= 2;
     const forkChildren = new Set(
+      fork ? alternatives.map((child) => child.id) : [],
+    );
+    const inactiveForkChildren = new Set(
       fork
         ? alternatives.filter((child) => !activePathIds.has(child.id)).map((child) => child.id)
         : [],
     );
-    // Inactive alternatives first, so folding the fork hides a contiguous
-    // block and the active continuation ends the folded range.
+    // Inactive alternatives first, preserving the timeline convention that
+    // the active continuation ends the fork's expanded range.
     const orderedChildren = fork
-      ? [...children].sort((a, b) => Number(forkChildren.has(b.id)) - Number(forkChildren.has(a.id)))
+      ? [...children].sort(
+        (a, b) => Number(inactiveForkChildren.has(b.id)) - Number(inactiveForkChildren.has(a.id)),
+      )
       : children;
     const lastForkChildId = [...orderedChildren].reverse().find((child) => forkChildren.has(child.id))?.id;
 
