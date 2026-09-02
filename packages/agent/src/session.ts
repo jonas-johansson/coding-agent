@@ -70,7 +70,31 @@ export type ToolResultEntry = BaseEntry & {
   display?: string;
 };
 
-export type SessionEntry = UserEntry | AssistantEntry | ToolResultEntry;
+export type CompactionEntry = BaseEntry & {
+  type: "compaction";
+  /** Model-facing summary of everything on the path before `firstKeptEntryId`. */
+  summary: string;
+  /**
+   * Id of the earliest ancestor that stays in the model context verbatim.
+   * Null when nothing is kept (the whole path before this entry is summarized).
+   */
+  firstKeptEntryId: string | null;
+  /** Context size (last response's input+output tokens) right before compaction. */
+  tokensBefore: number;
+  /** Estimated context size after compaction (char/4 heuristic). */
+  tokensAfter: number;
+  trigger: "auto" | "manual";
+  /** User focus instructions passed to `/compact`. */
+  focus?: string;
+  /** Summarizer usage/cost, rolled into session cost like assistant entries. */
+  provider: string;
+  modelId: string;
+  tokensIn: number;
+  tokensOut: number;
+  cost: number;
+};
+
+export type SessionEntry = UserEntry | AssistantEntry | ToolResultEntry | CompactionEntry;
 
 export type Session = {
   version: number;
@@ -117,6 +141,9 @@ export type CreateAssistantEntryParams = NewEntryFields &
 
 export type CreateToolResultEntryParams = NewEntryFields &
   Omit<ToolResultEntry, keyof BaseEntry | "type">;
+
+export type CreateCompactionEntryParams = NewEntryFields &
+  Omit<CompactionEntry, keyof BaseEntry | "type">;
 
 let currentSessionId: string = randomUUID();
 
@@ -270,6 +297,24 @@ export function createToolResultEntry(params: CreateToolResultEntryParams): Tool
     ...(params.isError && { isError: true }),
     ...(params.cost !== undefined && { cost: params.cost }),
     ...(params.display !== undefined && { display: params.display }),
+  };
+}
+
+export function createCompactionEntry(params: CreateCompactionEntryParams): CompactionEntry {
+  return {
+    ...createBaseEntry(params),
+    type: "compaction",
+    summary: params.summary,
+    firstKeptEntryId: params.firstKeptEntryId,
+    tokensBefore: params.tokensBefore,
+    tokensAfter: params.tokensAfter,
+    trigger: params.trigger,
+    ...(params.focus !== undefined && { focus: params.focus }),
+    provider: params.provider,
+    modelId: params.modelId,
+    tokensIn: params.tokensIn,
+    tokensOut: params.tokensOut,
+    cost: params.cost,
   };
 }
 
@@ -448,8 +493,13 @@ export function sessionToProviderMessages(session: Session, draft?: TurnDraft): 
 }
 
 export function entriesToProviderMessages(entries: readonly SessionEntry[]): ProviderMessage[] {
+  const { summary, entries: visible } = getModelVisibleEntries(entries);
   const messages: ProviderMessage[] = [];
   let pendingToolResults: ToolResultContent[] = [];
+
+  if (summary !== undefined) {
+    messages.push(buildSummaryMessage(summary));
+  }
 
   const flushToolResults = () => {
     if (pendingToolResults.length === 0) {
@@ -463,7 +513,7 @@ export function entriesToProviderMessages(entries: readonly SessionEntry[]): Pro
     pendingToolResults = [];
   };
 
-  for (const entry of entries) {
+  for (const entry of visible) {
     if (entry.type === "tool_result") {
       pendingToolResults.push(toProviderToolResult(entry));
       continue;
@@ -473,13 +523,75 @@ export function entriesToProviderMessages(entries: readonly SessionEntry[]): Pro
 
     if (entry.type === "user") {
       messages.push(toProviderUserMessage(entry));
-    } else {
+    } else if (entry.type === "assistant") {
       messages.push(toProviderAssistantMessage(entry));
     }
   }
 
   flushToolResults();
   return messages;
+}
+
+/**
+ * Apply the most recent compaction on a path. Returns the compaction summary
+ * (if any) and the entries the model should see: the kept tail before the
+ * compaction plus everything appended after it. Repeated compactions chain
+ * naturally because the second summarizer input includes the first summary.
+ */
+export function getModelVisibleEntries(entries: readonly SessionEntry[]): {
+  summary: string | undefined;
+  entries: SessionEntry[];
+} {
+  let compaction: CompactionEntry | undefined;
+  let compactionIndex = -1;
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const entry = entries[i];
+    if (entry.type === "compaction") {
+      compaction = entry;
+      compactionIndex = i;
+      break;
+    }
+  }
+
+  if (compaction === undefined || compactionIndex === -1) {
+    return { summary: undefined, entries: [...entries] };
+  }
+
+  const kept: SessionEntry[] = [];
+
+  if (compaction.firstKeptEntryId !== null) {
+    const firstKeptIndex = entries
+      .slice(0, compactionIndex)
+      .findIndex((entry) => entry.id === compaction.firstKeptEntryId);
+    if (firstKeptIndex !== -1) {
+      kept.push(...entries.slice(firstKeptIndex, compactionIndex));
+    }
+    // A missing firstKeptEntryId (corrupt session) keeps nothing; never throw.
+  }
+
+  kept.push(...entries.slice(compactionIndex + 1));
+  return { summary: compaction.summary, entries: kept };
+}
+
+/**
+ * The standalone user message that carries the compaction summary. It sits at
+ * the very front of the request and never changes until the next compaction,
+ * so it stays prompt-cache friendly.
+ */
+export function buildSummaryMessage(summary: string): UserMessage {
+  return {
+    role: "user",
+    content: [{
+      type: "text",
+      text: [
+        `<conversation_summary>`,
+        summary,
+        `</conversation_summary>`,
+        "",
+        "The conversation above this point was compacted. Continue from this state; do not re-ask for information already captured here.",
+      ].join("\n"),
+    }],
+  };
 }
 
 function toProviderUserMessage(entry: UserEntry): UserMessage {
@@ -561,7 +673,8 @@ function toSessionListItem(session: Session, filePath: string): SessionListItem 
   const title = session.title ?? firstUserMessagePreview(session);
   const cost = session.entries.reduce(
     (sum, entry) => sum + (entry.type === "assistant" ? entry.cost : 0)
-      + (entry.type === "tool_result" ? (entry.cost ?? 0) : 0),
+      + (entry.type === "tool_result" ? (entry.cost ?? 0) : 0)
+      + (entry.type === "compaction" ? entry.cost : 0),
     0,
   );
 
@@ -646,6 +759,20 @@ function isSessionEntry(value: unknown): value is SessionEntry {
         && isOptionalBoolean(value.isError)
         && isOptionalNumber(value.cost)
         && isOptionalString(value.display)
+      );
+    case "compaction":
+      return (
+        isString(value.summary)
+        && isNullableString(value.firstKeptEntryId)
+        && isNumber(value.tokensBefore)
+        && isNumber(value.tokensAfter)
+        && (value.trigger === "auto" || value.trigger === "manual")
+        && isOptionalString(value.focus)
+        && isString(value.provider)
+        && isString(value.modelId)
+        && isNumber(value.tokensIn)
+        && isNumber(value.tokensOut)
+        && isNumber(value.cost)
       );
     default:
       return false;

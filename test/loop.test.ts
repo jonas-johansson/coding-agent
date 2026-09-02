@@ -374,3 +374,82 @@ test("exclusive tools run sequentially, safe tools run concurrently", async () =
   await loopPromise;
   assert.deepEqual(order, ["start_exclusive", "end_exclusive"]);
 });
+
+// ── Auto-compaction trigger ──────────────────────────────────────────────────
+
+test("compact runs before the first request when initialContextTokens >= threshold", async () => {
+  const { provider, requests } = mockProvider([{ response: textResponse("done") }]);
+  let compactCalls = 0;
+
+  await runAgentLoop(baseParams({
+    provider,
+    compaction: {
+      thresholdTokens: 10,
+      initialContextTokens: 15,
+      compact: async () => {
+        compactCalls += 1;
+      },
+    },
+  }));
+
+  assert.equal(compactCalls, 1);
+  assert.equal(requests.length, 1);
+});
+
+test("compact runs before the second request when the first response crosses the threshold, at most once per response", async () => {
+  const { provider, requests } = mockProvider([
+    {
+      response: {
+        content: [{ type: "tool_use", id: "c1", name: "missing", input: {} }],
+        stopReason: "tool_use",
+        usage: { ...baseUsage, inputTokens: 10, outputTokens: 5 }, // 15 >= 10
+      },
+    },
+    { response: textResponse("done") },
+  ]);
+  let compactCalls = 0;
+
+  const result = await runAgentLoop(baseParams({
+    provider,
+    compaction: {
+      thresholdTokens: 10,
+      initialContextTokens: 0,
+      compact: async () => {
+        compactCalls += 1;
+      },
+    },
+  }));
+
+  assert.equal(result.cancelled, false);
+  // The first response's usage crossed the threshold, so compaction fired at
+  // the second iteration boundary. The second response also crossed it, but
+  // the loop ended, so no second call.
+  assert.equal(compactCalls, 1);
+  assert.equal(requests.length, 2);
+});
+
+test("compact is not called when the compaction policy is omitted", async () => {
+  const { provider } = mockProvider([{ response: textResponse("done") }]);
+
+  const result = await runAgentLoop(baseParams({ provider }));
+
+  assert.equal(result.cancelled, false);
+});
+
+test("abort inside compact cancels the run", async () => {
+  const { provider } = mockProvider([{ response: textResponse("done") }]);
+
+  await assert.rejects(
+    runAgentLoop(baseParams({
+      provider,
+      compaction: {
+        thresholdTokens: 10,
+        initialContextTokens: 15,
+        compact: async () => {
+          throw new DOMException("Aborted", "AbortError");
+        },
+      },
+    })),
+    (error: unknown) => (error as Error).name === "AbortError",
+  );
+});

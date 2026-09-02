@@ -16,6 +16,7 @@ import type { Readable, Writable } from "stream";
 import {
   appendTurnDraftEntry,
   commitTurnDraft,
+  createCompactionEntry,
   createProjectKey,
   createSession,
   createAssistantEntry,
@@ -31,6 +32,7 @@ import {
   isAbortError,
   listSessions,
   loadSession,
+  planCompaction,
   runAgentLoop,
   saveSession,
   sessionToProviderMessages,
@@ -38,6 +40,7 @@ import {
   setCurrentSkills,
   setAgentRuntime,
   shutdownMcpServers,
+  summarizeForCompaction,
   tools,
   getProviderToolDefinitions,
   isTurnDraftEmpty,
@@ -58,7 +61,7 @@ import {
   type StreamEvent,
 } from "@pace/llm";
 import { loadPreferences } from "./preferences";
-import { loadPaceConfig } from "./config";
+import { loadPaceConfig, DEFAULT_COMPACTION_CONFIG, type CompactionConfig } from "./config";
 import {
   assembleSystemText,
   computeCallCost,
@@ -298,12 +301,18 @@ export async function runHeadless(argv: string[], io: HeadlessIo = {}): Promise<
   }
 
   let modelSelectionInput = args.model;
+  let compactionConfig: CompactionConfig = DEFAULT_COMPACTION_CONFIG;
   if (modelSelectionInput === undefined) {
     try {
       modelSelectionInput = (await loadPaceConfig()).defaultModel;
     } catch {
       // Ignore config errors; fall back to the default model.
     }
+  }
+  try {
+    compactionConfig = (await loadPaceConfig()).compaction;
+  } catch {
+    // Config errors fall back to the compaction defaults.
   }
 
   let modelConfig: ModelConfig;
@@ -441,6 +450,23 @@ export async function runHeadless(argv: string[], io: HeadlessIo = {}): Promise<
     content: [{ type: "text", text: promptText }],
   }));
 
+  // ── Auto-compaction state ──
+  const initialEntries = [...getActivePath(session), ...turnDraft.entries];
+  let lastContextTokens = 0;
+  for (let i = initialEntries.length - 1; i >= 0; i -= 1) {
+    const entry = initialEntries[i];
+    if (entry.type === "assistant") {
+      lastContextTokens = entry.tokensIn + entry.tokensOut;
+      break;
+    }
+  }
+  const compactionThreshold = compactionConfig.auto && modelConfig.contextWindow > 0
+    ? Math.min(
+        compactionConfig.thresholdTokens,
+        modelConfig.contextWindow - modelConfig.maxOutputTokens - 8_000,
+      )
+    : undefined;
+
   const reasoningBlocks: ThinkingBlock[] = [];
   const toolNames = new Map<string, string>();
   const toolStartTimes = new Map<string, number>();
@@ -464,6 +490,87 @@ export async function runHeadless(argv: string[], io: HeadlessIo = {}): Promise<
       }
 
       const provider = io.provider ?? await resolveProvider(modelConfig);
+
+      const runCompaction = async () => {
+        const entries = [...getActivePath(session), ...turnDraft.entries];
+        const plan = planCompaction(entries, {
+          keepRecentTokens: compactionConfig.keepRecentTokens,
+        });
+        if (!plan) {
+          return;
+        }
+
+        // Summarizer model: compaction.model override when valid, else the
+        // run's model (cache sharing).
+        let summarizerConfig = modelConfig;
+        let summarizerVariant = modelVariant;
+        if (compactionConfig.model !== undefined) {
+          const selection = parseModelSelection(compactionConfig.model);
+          const overrideConfig = selection ? getModelConfig(selection.modelId) : undefined;
+          if (selection && overrideConfig) {
+            const overrideVariant = selection.variantId
+              ? getModelVariant(selection.modelId, selection.variantId)
+              : undefined;
+            summarizerConfig = overrideConfig;
+            summarizerVariant = overrideVariant && selection.variantId
+              ? { ...overrideVariant, id: selection.variantId }
+              : undefined;
+          }
+        }
+
+        const { summary, usage } = await summarizeForCompaction({
+          provider,
+          model: summarizerConfig.providerModel,
+          system: systemText,
+          toolDefs: getProviderToolDefinitions(),
+          providerOptions: {
+            ...(summarizerConfig.providerOptions ?? {}),
+            ...(summarizerVariant?.providerOptions ?? {}),
+          },
+          maxTokens: Math.min(summarizerConfig.maxOutputTokens, 16_000),
+          messages: plan.messagesToSummarize,
+        });
+
+        const cost = computeCallCost(
+          summarizerConfig,
+          usage.inputTokens,
+          usage.inputTokens - usage.cacheCreationTokens - usage.cacheReadTokens,
+          usage.cacheCreationTokens,
+          usage.cacheReadTokens,
+          usage.outputTokens,
+        );
+
+        const summaryWithFiles = plan.touchedFiles.length > 0
+          ? `${summary}\n\n## Files touched\n${plan.touchedFiles.map((file) => `- ${file}`).join("\n")}`
+          : summary;
+
+        const entry = createCompactionEntry({
+          summary: summaryWithFiles,
+          firstKeptEntryId: plan.firstKeptEntryId,
+          tokensBefore: lastContextTokens > 0 ? lastContextTokens : plan.tokensBeforeEstimate,
+          tokensAfter: plan.tokensKeptEstimate + Math.ceil((summaryWithFiles.length + 200) / 4),
+          trigger: "auto",
+          provider: summarizerConfig.provider,
+          modelId: summarizerConfig.id,
+          tokensIn: usage.inputTokens,
+          tokensOut: usage.outputTokens,
+          cost,
+        });
+
+        // Mid-turn: the draft's normal commit path persists the entry.
+        appendTurnDraftEntry(turnDraft, entry);
+        lastContextTokens = entry.tokensAfter;
+
+        if (streamEnabled) {
+          emit({
+            type: "compaction",
+            tokensBefore: entry.tokensBefore,
+            tokensAfter: entry.tokensAfter,
+            cost: entry.cost,
+          });
+        }
+      };
+
       const result = await runAgentLoop({
         provider,
         model: modelConfig.providerModel,
@@ -480,6 +587,23 @@ export async function runHeadless(argv: string[], io: HeadlessIo = {}): Promise<
         },
         signal: abortController.signal,
         maxTurns: args.maxTurns,
+
+        compaction: compactionThreshold === undefined ? undefined : {
+          thresholdTokens: compactionThreshold,
+          initialContextTokens: lastContextTokens,
+          compact: async () => {
+            try {
+              await runCompaction();
+            } catch (error) {
+              if (isAbortError(error)) throw error;
+              // Compaction is best-effort: continue with the full context
+              // rather than failing the run.
+              stderr.write(
+                `pace run: compaction failed: ${error instanceof Error ? error.message : String(error)}\n`,
+              );
+            }
+          },
+        },
 
         takeSteeringMessages: () => {
           const messages = steeringQueue.splice(0);
@@ -589,6 +713,8 @@ export async function runHeadless(argv: string[], io: HeadlessIo = {}): Promise<
             .map((block) => block.text)
             .join("\n");
           if (text) lastText = text;
+
+          lastContextTokens = response.usage.inputTokens + response.usage.outputTokens;
 
           appendTurnDraftEntry(turnDraft, createAssistantEntry({
             content: [...reasoningBlocks, ...response.content],

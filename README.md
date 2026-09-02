@@ -35,6 +35,7 @@ export FRIENDLI_API_KEY=...            # friendli/* models
 - Sessions
 - Undo
 - Bash, web search, web fetch, read, write, edit
+- Compaction
 - Paste image for vision models
 - MCP
 - Skills
@@ -114,6 +115,7 @@ Model catalog environment variables:
 | `/sessions` | List saved sessions for this project |
 | `/resume <id>` | Resume a saved session |
 | `/undo` | Rewind to before the last user message |
+| `/compact [focus]` | Summarize older context to free up the window |
 | `/skills` | List available skills |
 | `/skill:<name>` | Run a skill |
 | `/agents` | List available subagents |
@@ -153,9 +155,33 @@ Options:
 | `--append-system <text\|@file>` | Append extra system text |
 | `--steering-stdin` | Read NDJSON steering messages from stdin while running: `{"type":"steer","text":"..."}` |
 
-`stream-json` emits one JSON object per line: `system` (session id, model), `text_delta`, `reasoning_delta`, `tool_start` / `tool_input` / `tool_output` / `tool_content` / `tool_end`, `usage` (per assistant turn), and a final `result` (text, turns, usage, cost, stop reason). Exit codes: `0` finished, `1` error, `2` turn cap, `130` cancelled.
+`stream-json` emits one JSON object per line: `system` (session id, model), `text_delta`, `reasoning_delta`, `tool_start` / `tool_input` / `tool_output` / `tool_content` / `tool_end`, `usage` (per assistant turn), `compaction` (when the context is compacted), and a final `result` (text, turns, usage, cost, stop reason). Exit codes: `0` finished, `1` error, `2` turn cap, `130` cancelled.
 
 Sessions created by `pace run` are normal Pace sessions: resume them in the TUI with `pace --session-id <id>`, or continue them headlessly with `--session <id>`.
+
+## Context compaction
+
+Long conversations are compacted automatically so the model never runs out of window. When the context reaches the threshold, Pace summarizes the older conversation with a one-shot LLM call (same model, system prompt, and tools, so cache-capable providers serve it mostly from cache), appends a `compaction` entry to the session tree, and continues from the summary plus the most recent ~20k tokens verbatim. Nothing is deleted: `/tree` still shows the full history, and expanding the compacted block in the TUI shows the summary.
+
+Compaction also runs manually with `/compact [focus instructions]` — useful to shed context mid-task. Focus instructions are passed to the summarizer ("Pay particular attention to: …").
+
+Configure it under the `compaction` key (all fields optional):
+
+```json
+{
+  "compaction": {
+    "auto": true,
+    "thresholdTokens": 150000,
+    "keepRecentTokens": 20000,
+    "model": "opencode/deepseek-v4-flash:nothink"
+  }
+}
+```
+
+- `auto` — enable auto-compaction (default `true`)
+- `thresholdTokens` — context size that triggers compaction, clamped to the model's window (default `150000`)
+- `keepRecentTokens` — approximate size of the recent context kept verbatim (default `20000`)
+- `model` — summarizer model override; defaults to the current model for cache sharing
 
 ## Configuration
 

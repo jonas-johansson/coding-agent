@@ -101,6 +101,20 @@ export type AgentLoopParams = {
    * this for per-tool UI updates; persistence should use onToolResults.
    */
   onToolResult?: (executed: ExecutedTool) => void;
+
+  /** Auto-compaction policy. Omit to disable. */
+  compaction?: {
+    /** Compact before the next request once the context reaches this size. */
+    thresholdTokens: number;
+    /** Context size carried into this run (last assistant entry on the path). */
+    initialContextTokens: number;
+    /**
+     * Compact the context so the next `getMessages` returns a smaller payload.
+     * Called at most once per assistant response. Must not throw except for
+     * abort.
+     */
+    compact: () => Promise<void>;
+  };
 };
 
 // ── Tool execution ───────────────────────────────────────────────────────────
@@ -179,6 +193,8 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
   let cancelled = false;
   let hitTurnCap = false;
   let totalCost = 0;
+  let contextTokens = params.compaction?.initialContextTokens ?? 0;
+  let compactedSinceLastResponse = false;
   const usage: UsageInfo = {
     inputTokens: 0,
     outputTokens: 0,
@@ -195,6 +211,18 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
     throwIfAborted(params.signal);
 
     params.takeSteeringMessages?.();
+
+    // Auto-compaction fires at the iteration boundary, after steering so the
+    // newest user instruction is guaranteed to land in the kept tail. At most
+    // once per assistant response.
+    if (
+      params.compaction
+      && contextTokens >= params.compaction.thresholdTokens
+      && !compactedSinceLastResponse
+    ) {
+      await params.compaction.compact();
+      compactedSinceLastResponse = true;
+    }
 
     const messages = params.getMessages();
 
@@ -226,6 +254,11 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
 
     const callCost = params.computeCost(response.usage);
     totalCost += callCost;
+
+    // Track the context size for the compaction trigger and allow compaction
+    // again after the next response.
+    contextTokens = response.usage.inputTokens + response.usage.outputTokens;
+    compactedSinceLastResponse = false;
 
     params.onResponse?.(response, { cost: callCost, streamDurationMs });
 

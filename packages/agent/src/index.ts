@@ -1,4 +1,5 @@
 export * from "./session";
+export * from "./compaction";
 export * from "./skill";
 export * from "./agent";
 export * from "./frontmatter";

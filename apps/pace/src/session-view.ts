@@ -4,6 +4,7 @@ import { DEFAULT_COST_DISPLAY_CONFIG, type CostDisplayConfig } from "./config";
 import {
   getActivePath,
   type AssistantEntry,
+  type CompactionEntry,
   type Session,
   type SessionEntry,
   type ToolResultEntry,
@@ -43,6 +44,9 @@ export function entriesToRenderBlocks(
         if (!renderedToolResultEntryIds.has(entry.id)) {
           blocks.push(toolResultEntryToRenderBlock(entry));
         }
+        break;
+      case "compaction":
+        blocks.push(compactionEntryToRenderBlock(entry));
         break;
     }
   }
@@ -282,6 +286,16 @@ function toolResultEntryToRenderBlock(entry: ToolResultEntry): SessionRenderBloc
     title: `tool_result: ${entry.toolUseId}`,
     content: formatToolResultParts(entry.content),
     state: entry.isError ? "error" : "done",
+  };
+}
+
+function compactionEntryToRenderBlock(entry: CompactionEntry): SessionRenderBlock {
+  return {
+    key: `entry:${entry.id}`,
+    role: "assistant",
+    title: `Context compacted · ${formatTokenCount(entry.tokensBefore)} → ~${formatTokenCount(entry.tokensAfter)} tokens`,
+    content: entry.summary,
+    collapsed: true,
   };
 }
 

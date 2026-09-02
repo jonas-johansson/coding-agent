@@ -3,7 +3,7 @@ import { existsSync } from "fs";
 import { homedir } from "os";
 import { join, resolve, extname } from "path";
 import { Tui } from "./tui";
-import { formatSessionCost } from "./view-model";
+import { formatSessionCost, formatTokenCount } from "./view-model";
 import { getGitBranch } from "./git.js";
 import {
   formatTurnSummary,
@@ -13,9 +13,11 @@ import {
 } from "./session-view";
 import { reasoningDisplayContent, reasoningDisplayTitle, reasoningTitle } from "./reasoning";
 import {
+  appendEntries,
   appendTurnDraftEntry,
   commitTurnDraft,
   createAssistantEntry,
+  createCompactionEntry,
   createProjectKey,
   createSession,
   createToolResultEntry,
@@ -25,15 +27,19 @@ import {
   isTurnDraftEmpty,
   listSessions,
   loadSession,
+  planCompaction,
   saveSession,
   sessionToProviderMessages,
   setActiveEntryId,
+  summarizeForCompaction,
   undoLastUserTurn,
+  type CompactionEntry,
   type ContentBlock as SessionContentBlock,
   type Session,
   type SessionListItem,
   type TextBlock,
   type ThinkingBlock,
+  type TurnDraft,
 } from "@pace/agent";
 import { initHighlighter } from "./syntax";
 import {
@@ -83,7 +89,7 @@ import {
 import { readClipboardImage, type SupportedImageMediaType } from "./clipboard";
 import { sendDesktopNotification } from "./notify";
 import { onEvent, resolveProvider } from "@pace/llm";
-import { loadPaceConfig, DEFAULT_COST_DISPLAY_CONFIG, type CostDisplayConfig } from "./config";
+import { loadPaceConfig, DEFAULT_COST_DISPLAY_CONFIG, DEFAULT_COMPACTION_CONFIG, type CostDisplayConfig, type CompactionConfig } from "./config";
 import {
   assembleSystemText,
   computeCallCost,
@@ -153,6 +159,9 @@ let sessionTitleModelSelection: ModelSelection = {
   variantId: DEFAULT_SESSION_TITLE_MODEL_VARIANT,
 };
 let activeSession = createSession(process.cwd(), currentModelId);
+
+/** Compaction settings from ~/.config/pace/config.json (defaults apply otherwise). */
+let compactionConfig: CompactionConfig = DEFAULT_COMPACTION_CONFIG;
 
 /**
  * MCP server enable/disable overrides (Pace-owned runtime state). The
@@ -263,6 +272,7 @@ const tui = new Tui({
     { label: "/star", detail: "Star or unstar the current session", kind: "command", insertText: "/star" },
     { label: "/tree", detail: "Open the conversation tree (Ctrl+B)", kind: "command", insertText: "/tree", executeOnAccept: true },
     { label: "/undo", detail: "Undo the last user turn", kind: "command", insertText: "/undo" },
+    { label: "/compact", detail: "Summarize older context to free up the window", kind: "command", insertText: "/compact " },
     { label: "/skills", detail: "List available skills", kind: "command", insertText: "/skills " },
     { label: "/skill:<name>", detail: "Load and run a skill", kind: "command", insertText: "/skill:" },
     { label: "/agents", detail: "List available agents", kind: "command", insertText: "/agents " },
@@ -342,6 +352,11 @@ let lastOutputTokens = 0;
 let lastCacheReadTokens = 0;
 let lastCacheCreationTokens = 0;
 let accumulatedCost = 0;
+/** True while the context meter shows a post-compaction estimate. */
+let contextEstimated = false;
+/** Consecutive auto-compaction failures (circuit breaker: 3 disables auto). */
+let compactionFailures = 0;
+let autoCompactionDisabled = false;
 
 // ── Image attachment state ───────────────────────────────────────────────────
 
@@ -406,6 +421,7 @@ function updateContextInfo() {
     contextWindow: config.contextWindow,
     cacheReadTokens: lastCacheReadTokens,
     cacheCreationTokens: lastCacheCreationTokens,
+    ...(contextEstimated && { estimated: true }),
   });
   tui.setCost(accumulatedCost);
 }
@@ -422,13 +438,26 @@ function refreshSessionStatsFromSession() {
     }
   }
 
-  lastInputTokens = lastAssistantEntry?.tokensIn ?? 0;
-  lastOutputTokens = lastAssistantEntry?.tokensOut ?? 0;
-  lastCacheReadTokens = lastAssistantEntry?.cacheReadTokens ?? 0;
-  lastCacheCreationTokens = lastAssistantEntry?.cacheCreationTokens ?? 0;
+  // A compaction as the newest entry means the meter shows its estimate
+  // until the next real response usage arrives.
+  const newestEntry = activePath[activePath.length - 1];
+  if (newestEntry?.type === "compaction") {
+    lastInputTokens = newestEntry.tokensAfter;
+    lastOutputTokens = 0;
+    lastCacheReadTokens = 0;
+    lastCacheCreationTokens = 0;
+    contextEstimated = true;
+  } else {
+    lastInputTokens = lastAssistantEntry?.tokensIn ?? 0;
+    lastOutputTokens = lastAssistantEntry?.tokensOut ?? 0;
+    lastCacheReadTokens = lastAssistantEntry?.cacheReadTokens ?? 0;
+    lastCacheCreationTokens = lastAssistantEntry?.cacheCreationTokens ?? 0;
+    contextEstimated = false;
+  }
   accumulatedCost = activeSession.entries.reduce(
     (sum, entry) => sum + (entry.type === "assistant" ? entry.cost : 0)
-      + (entry.type === "tool_result" ? (entry.cost ?? 0) : 0),
+      + (entry.type === "tool_result" ? (entry.cost ?? 0) : 0)
+      + (entry.type === "compaction" ? entry.cost : 0),
     0,
   );
   updateContextInfo();
@@ -461,7 +490,7 @@ async function navigateToEntry(entryId: string) {
           parentId = null;
           break;
         }
-        if (parent.type === "user" || parent.type === "assistant") {
+        if (parent.type === "user" || parent.type === "assistant" || parent.type === "compaction") {
           break;
         }
         parentId = parent.parentId;
@@ -703,6 +732,183 @@ function maybeGenerateSessionTitleFromFirstMessage(
       }
     }
   })();
+}
+
+// ── Compaction ───────────────────────────────────────────────────────────────
+
+/**
+ * Build the agent system text (base → skills → MCP → AGENTS.md) and refresh
+ * the skill/agent/subagent runtime. Shared by the main prompt loop and the
+ * compaction summarizer so the summarizer request keeps the same cache
+ * prefix as the main loop.
+ */
+async function buildAgentSystemText(): Promise<string> {
+  const [globalAgentsFileContents, agentsFileContents, skills, agents] = await Promise.all([
+    loadGlobalAgentsFile(),
+    loadAgentsFile(),
+    discoverSkills(),
+    discoverAgents(),
+  ]);
+
+  setCurrentSkills(skills);
+  setCurrentAgents(agents);
+
+  const skillsSection = formatSkillsSystemPromptBlock(skills);
+
+  setAgentRuntime(makeSubagentRuntime(
+    {
+      resolveModelConfig: (modelId) =>
+        (modelId !== undefined ? getModelConfig(modelId) : undefined) ?? currentModelConfig(),
+    },
+    { skillsSection, globalAgentsFileContents, agentsFileContents },
+  ));
+
+  return assembleSystemText({
+    cwd: process.cwd(),
+    skillsSection: skillsSection || undefined,
+    mcpServers: getConnectedMcpServers(),
+    globalAgentsFileContents,
+    agentsFileContents,
+  });
+}
+
+/**
+ * Effective auto-compaction threshold: the configured threshold clamped to
+ * the model's window, so 128k/32k models compact before overflowing.
+ * Disabled (undefined) when auto-compaction is off or the context window is
+ * unknown.
+ */
+function effectiveCompactionThreshold(modelConfig: ModelConfig): number | undefined {
+  if (!compactionConfig.auto || modelConfig.contextWindow <= 0) {
+    return undefined;
+  }
+  return Math.min(
+    compactionConfig.thresholdTokens,
+    modelConfig.contextWindow - modelConfig.maxOutputTokens - 8_000,
+  );
+}
+
+/**
+ * Resolve the summarizer model: `compaction.model` override when set and
+ * valid, otherwise the current model (cache sharing with the main loop).
+ */
+function resolveSummarizerModel(): { config: ModelConfig; variant: ResolvedModelVariant | undefined } {
+  if (compactionConfig.model !== undefined) {
+    const selection = parseModelSelection(compactionConfig.model);
+    const config = selection ? getModelConfig(selection.modelId) : undefined;
+    if (selection && config) {
+      const variant = selection.variantId
+        ? getModelVariant(selection.modelId, selection.variantId)
+        : undefined;
+      return {
+        config,
+        variant: variant && selection.variantId ? { ...variant, id: selection.variantId } : undefined,
+      };
+    }
+  }
+  return { config: currentModelConfig(), variant: currentModelVariant() };
+}
+
+/**
+ * Plan and run one compaction: summarize the older context via a one-shot
+ * LLM call and append a `compaction` entry to the session (into the turn
+ * draft when mid-turn). Updates the token meter and returns the new entry,
+ * or null when there is nothing to compact. UI blocks are added by callers.
+ */
+async function compactContext(opts: {
+  trigger: "auto" | "manual";
+  focus?: string;
+  /** Present when called from the loop mid-turn. */
+  draft?: TurnDraft;
+  signal?: AbortSignal;
+}): Promise<CompactionEntry | null> {
+  const entries = [
+    ...getActivePath(activeSession),
+    ...(opts.draft?.entries ?? []),
+  ];
+  const plan = planCompaction(entries, {
+    keepRecentTokens: compactionConfig.keepRecentTokens,
+  });
+  if (!plan) {
+    return null;
+  }
+
+  const { config: modelConfig, variant: modelVariant } = resolveSummarizerModel();
+  const provider = await resolveProvider(modelConfig);
+  const systemText = await buildAgentSystemText();
+
+  const { summary, usage } = await summarizeForCompaction({
+    provider,
+    model: modelConfig.providerModel,
+    system: systemText,
+    toolDefs: getProviderToolDefinitions(),
+    providerOptions: {
+      ...(modelConfig.providerOptions ?? {}),
+      ...(modelVariant?.providerOptions ?? {}),
+    },
+    maxTokens: Math.min(modelConfig.maxOutputTokens, 16_000),
+    messages: plan.messagesToSummarize,
+    focus: opts.focus,
+    signal: opts.signal,
+  });
+
+  const cost = computeCallCost(
+    modelConfig,
+    usage.inputTokens,
+    usage.inputTokens - usage.cacheCreationTokens - usage.cacheReadTokens,
+    usage.cacheCreationTokens,
+    usage.cacheReadTokens,
+    usage.outputTokens,
+  );
+
+  const summaryWithFiles = plan.touchedFiles.length > 0
+    ? `${summary}\n\n## Files touched\n${plan.touchedFiles.map((file) => `- ${file}`).join("\n")}`
+    : summary;
+
+  // Summary message overhead (wrapper text) plus the kept tail estimate.
+  const tokensBefore = lastInputTokens + lastOutputTokens > 0
+    ? lastInputTokens + lastOutputTokens
+    : plan.tokensBeforeEstimate;
+  const tokensAfter = plan.tokensKeptEstimate
+    + Math.ceil((summaryWithFiles.length + 200) / 4);
+
+  const entry = createCompactionEntry({
+    summary: summaryWithFiles,
+    firstKeptEntryId: plan.firstKeptEntryId,
+    tokensBefore,
+    tokensAfter,
+    trigger: opts.trigger,
+    ...(opts.focus !== undefined && { focus: opts.focus }),
+    provider: modelConfig.provider,
+    modelId: modelConfig.id,
+    tokensIn: usage.inputTokens,
+    tokensOut: usage.outputTokens,
+    cost,
+  });
+
+  if (opts.draft) {
+    // Mid-turn: the draft's normal commit path persists the entry.
+    appendTurnDraftEntry(opts.draft, entry);
+  } else {
+    activeSession = appendEntries(activeSession, [entry]);
+    await saveSession(activeSession);
+  }
+
+  // The next request is much smaller; show an estimate until real usage
+  // arrives from the next response.
+  lastInputTokens = entry.tokensAfter;
+  lastOutputTokens = 0;
+  lastCacheReadTokens = 0;
+  lastCacheCreationTokens = 0;
+  contextEstimated = true;
+  accumulatedCost += entry.cost;
+  updateContextInfo();
+
+  tui.setStatus(
+    `Compacted ${formatTokenCount(entry.tokensBefore)} → ~${formatTokenCount(entry.tokensAfter)} tokens`,
+  );
+
+  return entry;
 }
 
 // ── Preference persistence ───────────────────────────────────────────────────
@@ -1070,6 +1276,70 @@ async function handleCommand(command: string): Promise<boolean> {
       rebuildTuiFromSession();
       refreshSessionStatsFromSession();
       tui.setInput(lastUserText);
+      return true;
+    }
+    case "/compact": {
+      const focus = args.join(" ").trim() || undefined;
+      if (promptRunning) {
+        tui.setStatus("Agent is still running");
+        return true;
+      }
+
+      const plan = planCompaction(getActivePath(activeSession), {
+        keepRecentTokens: compactionConfig.keepRecentTokens,
+      });
+      if (!plan) {
+        tui.addBlock({
+          role: "assistant",
+          title: "Compact",
+          content: `Nothing to compact (context ≈ ${formatTokenCount(lastInputTokens + lastOutputTokens)} tokens).`,
+        });
+        return true;
+      }
+
+      promptRunning = true;
+      const abortController = new AbortController();
+      currentAbortController = abortController;
+      tui.setRunning(true, "Compacting");
+
+      const blockId = tui.addBlock({
+        role: "assistant",
+        title: "Compacting context…",
+        content: "",
+        state: "running",
+      });
+
+      try {
+        const entry = await compactContext({
+          trigger: "manual",
+          focus,
+          signal: abortController.signal,
+        });
+        if (entry) {
+          tui.updateBlock(blockId, {
+            title: `Context compacted · ${formatTokenCount(entry.tokensBefore)} → ~${formatTokenCount(entry.tokensAfter)} tokens`,
+            content: entry.summary,
+            collapsed: true,
+            state: "done",
+          });
+        } else {
+          tui.updateBlock(blockId, {
+            title: "Compact",
+            content: "Nothing to compact.",
+            state: "done",
+          });
+        }
+      } catch (error: unknown) {
+        if (isAbortError(error)) {
+          tui.updateBlock(blockId, { title: "Cancelled", content: "Compaction cancelled.", state: "error" });
+        } else {
+          tui.updateBlock(blockId, { title: "Compaction failed", content: formatError(error), state: "error" });
+        }
+      } finally {
+        promptRunning = false;
+        currentAbortController = null;
+        tui.setRunning(false, "idle");
+      }
       return true;
     }
     case "/skills": {
@@ -1527,40 +1797,9 @@ async function prompt(
   currentAbortController = abortController;
   const signal = abortController.signal;
 
-  const [globalAgentsFileContents, agentsFileContents, skills, agents] = await Promise.all([
-    loadGlobalAgentsFile(),
-    loadAgentsFile(),
-    discoverSkills(),
-    discoverAgents(),
-  ]);
-
-  // Update the skill tool with the current set of skills
-  setCurrentSkills(skills);
-
-  // Update the agent tool with the current set of agents
-  setCurrentAgents(agents);
-
-  // Skills section shared by the main prompt and the subagent prompts below.
-  const skillsSection = formatSkillsSystemPromptBlock(skills);
-
-  // Inject the subagent runtime into the agent tool. The runtime owns the
-  // provider, model, system prompt, and cost wiring because those live here.
-  setAgentRuntime(makeSubagentRuntime(
-    {
-      resolveModelConfig: (modelId) =>
-        (modelId !== undefined ? getModelConfig(modelId) : undefined) ?? currentModelConfig(),
-    },
-    { skillsSection, globalAgentsFileContents, agentsFileContents },
-  ));
-
-  // Build system text: base → skills → MCP → AGENTS.md
-  const systemText = assembleSystemText({
-    cwd: process.cwd(),
-    skillsSection: skillsSection || undefined,
-    mcpServers: getConnectedMcpServers(),
-    globalAgentsFileContents,
-    agentsFileContents,
-  });
+  // Build system text: base → skills → MCP → AGENTS.md. Also refreshes the
+  // skill/agent/subagent runtime.
+  const systemText = await buildAgentSystemText();
 
   const modelConfig = currentModelConfig();
   const modelVariant = currentModelVariant();
@@ -1614,6 +1853,68 @@ async function prompt(
           && { supportsImages: modelConfig.supportsImages }),
       },
       signal,
+
+      compaction: (() => {
+        const threshold = effectiveCompactionThreshold(modelConfig);
+        if (threshold === undefined) {
+          return undefined;
+        }
+        return {
+          thresholdTokens: threshold,
+          initialContextTokens: lastInputTokens + lastOutputTokens,
+          compact: async () => {
+            // Circuit breaker: 3 consecutive summarizer failures disable
+            // auto-compaction for the rest of the session. Manual /compact
+            // is never blocked by it.
+            if (autoCompactionDisabled) {
+              return;
+            }
+            tui.setRunning(true, "Compacting");
+            let succeeded = false;
+            try {
+              const entry = await compactContext({
+                trigger: "auto",
+                draft: turnDraft,
+                signal,
+              });
+              if (entry) {
+                succeeded = true;
+                compactionFailures = 0;
+                tui.addBlock({
+                  role: "assistant",
+                  title: `Context compacted · ${formatTokenCount(entry.tokensBefore)} → ~${formatTokenCount(entry.tokensAfter)} tokens`,
+                  content: entry.summary,
+                  collapsed: true,
+                });
+              }
+            } catch (error) {
+              if (isAbortError(error)) throw error;
+              compactionFailures += 1;
+              if (compactionFailures >= 3) {
+                autoCompactionDisabled = true;
+                tui.addBlock({
+                  role: "error",
+                  title: "Auto-compaction disabled",
+                  content: `Compaction failed ${compactionFailures} consecutive times and is disabled for this session. Manual /compact still works.\n\n${formatError(error)}`,
+                });
+              } else {
+                tui.addBlock({
+                  role: "error",
+                  title: "Compaction failed",
+                  content: formatError(error),
+                });
+              }
+            } finally {
+              // On success the "Compacted X → ~Y" status set by
+              // compactContext stays until the next stream event; on
+              // failure restore the loop's running indicator.
+              if (!succeeded) {
+                tui.setRunning(true, "Reasoning");
+              }
+            }
+          },
+        };
+      })(),
 
       takeSteeringMessages: () => {
         const steeringMessages = steeringQueue.splice(0);
@@ -1938,6 +2239,10 @@ async function main() {
   try {
     const paceConfig = await loadPaceConfig();
     costDisplayConfig = paceConfig.cost;
+    compactionConfig = paceConfig.compaction;
+    if (compactionConfig.model !== undefined && parseModelSelection(compactionConfig.model) === undefined) {
+      throw new Error(`Invalid compaction.model. Expected provider/model or provider/model:variant for a supported provider: ${compactionConfig.model}`);
+    }
     tui.setCostDisplayConfig(paceConfig.cost);
     applyConfiguredModels(paceConfig);
     syncThemeFromTerminal();

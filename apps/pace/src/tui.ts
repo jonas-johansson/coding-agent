@@ -4969,11 +4969,12 @@ function isEmojiPresentation(codePoint: number) {
 }
 
 function formatContextInfo(info: ContextInfo): string {
+  const prefix = info.estimated ? "~" : "";
   const used = formatTokenCount(info.usedTokens);
   const percent = info.contextWindow > 0
     ? Math.round((info.usedTokens / info.contextWindow) * 100)
     : 0;
-  return `${used} (${percent}%)`;
+  return `${prefix}${used} (${percent}%)`;
 }
 
 function fg(code: number) {

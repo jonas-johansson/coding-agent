@@ -373,3 +373,70 @@ test("sessions are stored under the project key for the cwd", async () => {
   const files = await readdir(sessionsDir);
   assert.ok(files.includes(`${result.session}.json`));
 });
+
+// ── Auto-compaction ──────────────────────────────────────────────────────────
+
+test("auto-compaction appends a compaction entry and emits a compaction event", async () => {
+  // Low threshold + tiny keep budget so the scripted usage (10 in + 5 out)
+  // crosses the threshold and everything before the last exchange is
+  // summarized.
+  const configDir = join(fakeHome, ".config", "pace");
+  const { writeFile, mkdir } = await import("fs/promises");
+  await mkdir(configDir, { recursive: true });
+  await writeFile(
+    join(configDir, "config.json"),
+    JSON.stringify({ compaction: { thresholdTokens: 15, keepRecentTokens: 1 } }),
+  );
+
+  const { provider, requests } = mockProvider([
+    // Iteration 1: tool use, usage crosses the 15-token threshold.
+    {
+      response: {
+        content: [{ type: "tool_use", id: "c1", name: "missing_tool", input: {} }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheCreationTokens: 0 },
+      },
+    },
+    // Summarizer call.
+    {
+      response: {
+        content: [{ type: "text", text: "## Goal\nSummarized." }],
+        stopReason: "end_turn",
+        usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheCreationTokens: 0 },
+      },
+    },
+    // Iteration 2: final text response.
+    { response: textResponse("done") },
+  ]);
+
+  const io = makeIo(provider);
+  const readStdout = startCollecting(io.stdout);
+  const code = await runHeadless(["--output-format", "stream-json", "Say hi"], io);
+  assert.equal(code, 0);
+
+  const lines = (await readStdout()).trim().split("\n").map((line) => JSON.parse(line) as { type: string });
+  const compactionEvents = lines.filter((line) => line.type === "compaction") as
+    { type: string; tokensBefore: number; tokensAfter: number; cost: number }[];
+  assert.equal(compactionEvents.length, 1);
+  assert.equal(compactionEvents[0].tokensBefore, 15);
+  assert.ok(compactionEvents[0].tokensAfter > 0);
+
+  // The third request (after compaction) starts with the summary user message.
+  const thirdMessages = requests[2].messages;
+  const firstText = (thirdMessages[0].content as Array<{ type?: string; text?: string }>)
+    .filter((b) => b.type === "text").map((b) => b.text).join("");
+  assert.match(firstText, /<conversation_summary>/);
+  assert.match(firstText, /Summarized\./);
+
+  // The saved session contains the compaction entry.
+  const result = lines.at(-1) as { session: string };
+  const session = await readSessionFile(result.session);
+  const entries = session.entries as Array<{ type: string }>;
+  assert.deepEqual(entries.map((e) => e.type), [
+    "user",
+    "assistant",
+    "tool_result",
+    "compaction",
+    "assistant",
+  ]);
+});

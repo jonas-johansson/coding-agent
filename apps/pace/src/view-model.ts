@@ -26,6 +26,8 @@ export type ContextInfo = {
   contextWindow: number;
   cacheReadTokens?: number;
   cacheCreationTokens?: number;
+  /** True when usedTokens is an estimate (e.g. right after a compaction). */
+  estimated?: boolean;
 };
 
 export function formatTokenCount(tokens: number): string {
