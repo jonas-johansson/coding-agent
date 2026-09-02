@@ -89,19 +89,20 @@ test("tree nests only branch alternatives under a fork", () => {
   const a1bRow = rows.find((row) => row.id === a1b.id);
   assert.equal(u1Row?.depth, 0);
   assert.equal(u1Row?.hasChildren, true);
+  // Only the inactive alternative indents; the active continuation stays on
+  // the flat timeline.
   assert.equal(a1Row?.depth, 1);
   assert.equal(a1Row?.isForkChild, true);
   assert.equal(a1Row?.isLastForkChild, true);
   assert.equal(a1Row?.isActive, false);
-  assert.equal(a1bRow?.depth, 1);
-  assert.equal(a1bRow?.isForkChild, true);
-  assert.equal(a1bRow?.isLastForkChild, undefined);
+  assert.equal(a1bRow?.depth, 0);
+  assert.equal(a1bRow?.isForkChild, undefined);
   assert.equal(a1bRow?.isLeaf, true);
 });
 
 // ── Compaction sections ──────────────────────────────────────────────────────
 
-test("tree renders a compaction as a section with folded summarized entries", () => {
+test("tree renders a compaction inline with dimmed summarized entries", () => {
   let session = createSession("/tmp", "test-model");
   const u1 = userEntry();
   const a1 = assistantEntry();
@@ -119,29 +120,26 @@ test("tree renders a compaction as a section with folded summarized entries", ()
   const u2Row = rows.find((row) => row.id === u2.id);
   const a2Row = rows.find((row) => row.id === a2.id);
 
-  // The compaction is a root-level section header before its summarized range.
+  // The compaction renders inline at its chronological position (right
+  // after its kept tail), not as a header before its summarized range.
   assert.equal(compRow?.depth, 0);
   assert.equal(compRow?.role, "compaction");
-  assert.equal(compRow?.hasChildren, true);
-  assert.equal(compRow?.startFolded, true);
+  assert.equal(compRow?.hasChildren, false);
   assert.match(compRow?.preview ?? "", /Context compacted · .* tokens · auto/);
 
-  // Summarized entries nest under it, dimmed, with connectors.
-  assert.equal(u1Row?.depth, 1);
+  // Summarized entries stay in place, dimmed, on the flat timeline.
+  assert.equal(u1Row?.depth, 0);
   assert.equal(u1Row?.summarized, true);
-  assert.equal(u1Row?.isForkChild, true);
-  assert.equal(a1Row?.depth, 1);
+  assert.equal(a1Row?.depth, 0);
   assert.equal(a1Row?.summarized, true);
-  assert.equal(a1Row?.isLastForkChild, true);
 
-  // The kept tail anchors at the compaction's own depth: folding the
-  // summary never hides the live context.
+  // The kept tail and the compaction row are normal flat rows.
   assert.equal(u2Row?.depth, 0);
   assert.equal(u2Row?.summarized, undefined);
   assert.equal(a2Row?.depth, 0);
 });
 
-test("tree renders chained compactions as nested sections", () => {
+test("tree dims chained compaction ranges in place", () => {
   let session = createSession("/tmp", "test-model");
   const u1 = userEntry();
   const a1 = assistantEntry();
@@ -164,16 +162,14 @@ test("tree renders chained compactions as nested sections", () => {
   const u2Row = rows.find((row) => row.id === u2.id);
   const u3Row = rows.find((row) => row.id === u3.id);
 
-  // comp1's section keeps its own summarized range…
-  assert.equal(comp1Row?.depth, 1);
-  assert.equal(u1Row?.depth, 2);
-  assert.equal(u1Row?.summarized, true);
-  // …and is itself swallowed by comp2's section.
+  // Everything stays on the flat timeline at its chronological position.
+  assert.equal(comp1Row?.depth, 0);
   assert.equal(comp2Row?.depth, 0);
-  // comp1's former kept tail (u2) is now summarized by comp2.
-  assert.equal(u2Row?.depth, 1);
+  // comp1's summarized range…
+  assert.equal(u1Row?.summarized, true);
+  // …comp1's former kept tail (u2, a2) and comp1's own row are summarized
+  // by comp2 — the model no longer sees them.
   assert.equal(u2Row?.summarized, true);
-  // comp2's kept tail anchors at root depth.
-  assert.equal(u3Row?.depth, 0);
+  // comp2's kept tail is live context.
   assert.equal(u3Row?.summarized, undefined);
 });

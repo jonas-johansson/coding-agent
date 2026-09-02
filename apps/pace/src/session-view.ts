@@ -357,8 +357,6 @@ export type TreeOverlayEntry = {
   timestamp: string;
   /** Row is hidden behind a compaction summary (rendered dimmed). */
   summarized?: boolean;
-  /** Folded by default (compaction summary ranges). */
-  startFolded?: boolean;
   /** Row is one of several children under its parent (connector glyph). */
   isForkChild?: boolean;
   isLastForkChild?: boolean;
@@ -393,56 +391,32 @@ export function sessionToTreeOverlayEntries(session: Session): TreeOverlayEntry[
     visibleParentId.set(entry.id, parentId);
   }
 
-  // ── Compaction sections ─────────────────────────────────────────────────
-  // Each compaction on the active path becomes a section header: the entries
-  // it summarizes are re-parented under its row (display only — the session
-  // tree is untouched) and folded by default. The first kept entry anchors
-  // to the compaction row at the same depth, so folding the summary never
-  // hides the live context. The compaction row itself becomes a root so it
-  // never nests inside an earlier compaction's folded range.
+  // ── Summarized ranges ────────────────────────────────────────────────────
+  // Entries hidden behind a compaction summary are dimmed in place — the
+  // compaction row itself renders at its chronological position (right after
+  // its kept tail), so the tree reads as an honest timeline.
   const pathCompactions: Array<{ entry: CompactionEntry; order: number; firstKeptOrder?: number }> = activePath
     .map((entry, order) => ({ entry, order }))
     .filter((item): item is { entry: CompactionEntry; order: number } => item.entry.type === "compaction");
   const summarizedIds = new Set<string>();
-  const anchorIds = new Set<string>();
   for (let i = 0; i < pathCompactions.length; i += 1) {
-    const { entry: compaction, order: compactionOrder } = pathCompactions[i];
     // Entries summarized by this compaction: on the active path from the
     // previous compaction's kept-tail start through just before this
-    // compaction's kept tail. This includes entries the previous compaction
-    // kept and the previous compaction row itself — later compactions
-    // override earlier claims, which is what makes chained compactions
-    // render correctly.
+    // compaction's kept tail.
     const prevBound = i > 0
       ? pathCompactions[i - 1].firstKeptOrder ?? pathCompactions[i - 1].order
       : 0;
-    const firstKeptOrder = compaction.firstKeptEntryId !== null
-      ? activePathOrder.get(compaction.firstKeptEntryId)
+    const firstKeptOrder = pathCompactions[i].entry.firstKeptEntryId !== null
+      ? activePathOrder.get(pathCompactions[i].entry.firstKeptEntryId ?? "")
       : undefined;
     pathCompactions[i].firstKeptOrder = firstKeptOrder;
     const summarizedEnd = firstKeptOrder ?? -1; // corrupt (no kept anchor): summarize nothing
     for (let order = prevBound; order < summarizedEnd; order += 1) {
       const entry = activePath[order];
-      anchorIds.delete(entry.id);
       if (isVisibleEntry(entry)) {
         summarizedIds.add(entry.id);
-        visibleParentId.set(entry.id, compaction.id);
       }
     }
-
-    // Anchor: first visible kept entry, pinned under the compaction row at
-    // the same depth so the live timeline continues outside the fold.
-    const anchorStart = firstKeptOrder ?? compactionOrder + 1;
-    for (let order = anchorStart; order < activePath.length; order += 1) {
-      const entry = activePath[order];
-      if (entry.type !== "compaction" && isVisibleEntry(entry)) {
-        anchorIds.add(entry.id);
-        visibleParentId.set(entry.id, compaction.id);
-        break;
-      }
-    }
-
-    visibleParentId.set(compaction.id, null);
   }
 
   const childrenByParent = new Map<string | null, TreeEntry[]>();
@@ -469,32 +443,25 @@ export function sessionToTreeOverlayEntries(session: Session): TreeOverlayEntry[
 
   const rows: TreeOverlayEntry[] = [];
 
-  function traverse(
-    entry: TreeEntry,
-    depth: number,
-    summarized: boolean,
-    forkChild: boolean,
-    lastForkChild: boolean,
-  ) {
+  function traverse(entry: TreeEntry, depth: number, summarized: boolean, forkChild: boolean, lastForkChild: boolean) {
     const children = sortEntries(childrenByParent.get(entry.id) ?? []);
-    const isCompaction = entry.type === "compaction";
-    // Branch alternatives: children that continue or fork the timeline.
-    // A compaction's summarized children and kept-tail anchor are not
-    // alternatives — the anchor is the timeline continuation.
-    const alternatives = children.filter(
-      (child) => !summarizedIds.has(child.id) && !anchorIds.has(child.id),
-    );
+    // Branch alternatives: children that are not compaction summaries. The
+    // fork only indents the INACTIVE alternatives — the active continuation
+    // stays on the flat timeline so a branch point doesn't push the whole
+    // rest of the conversation into a nested level.
+    const alternatives = children.filter((child) => !summarizedIds.has(child.id));
     const fork = alternatives.length >= 2;
-    const forkChildren = new Set<string>(fork ? alternatives.map((child) => child.id) : []);
-    if (isCompaction) {
-      // Summarized children render with connectors under the compaction row.
-      for (const child of children) {
-        if (summarizedIds.has(child.id)) {
-          forkChildren.add(child.id);
-        }
-      }
-    }
-    const lastForkChildId = [...children].reverse().find((child) => forkChildren.has(child.id))?.id;
+    const forkChildren = new Set(
+      fork
+        ? alternatives.filter((child) => !activePathIds.has(child.id)).map((child) => child.id)
+        : [],
+    );
+    // Inactive alternatives first, so folding the fork hides a contiguous
+    // block and the active continuation ends the folded range.
+    const orderedChildren = fork
+      ? [...children].sort((a, b) => Number(forkChildren.has(b.id)) - Number(forkChildren.has(a.id)))
+      : children;
+    const lastForkChildId = [...orderedChildren].reverse().find((child) => forkChildren.has(child.id))?.id;
 
     rows.push({
       id: entry.id,
@@ -506,19 +473,16 @@ export function sessionToTreeOverlayEntries(session: Session): TreeOverlayEntry[
         : formatTreePreview(entry),
       isActive: activePathIds.has(entry.id),
       isLeaf: session.activeEntryId === entry.id,
-      hasChildren: fork || (isCompaction && forkChildren.size > 0),
+      hasChildren: fork,
       timestamp: entry.timestamp,
       summarized: summarized || undefined,
-      startFolded: isCompaction || undefined,
       isForkChild: forkChild || undefined,
       isLastForkChild: lastForkChild || undefined,
     });
 
-    for (const child of children) {
+    for (const child of orderedChildren) {
       const childSummarized = summarizedIds.has(child.id);
-      const childDepth = childSummarized || (fork && !anchorIds.has(child.id))
-        ? depth + 1
-        : depth;
+      const childDepth = forkChildren.has(child.id) ? depth + 1 : depth;
       traverse(
         child,
         childDepth,
@@ -531,7 +495,7 @@ export function sessionToTreeOverlayEntries(session: Session): TreeOverlayEntry[
 
   const roots = sortEntries(childrenByParent.get(null) ?? []);
   for (const root of roots) {
-    traverse(root, 0, false, false, false);
+    traverse(root, 0, summarizedIds.has(root.id), false, false);
   }
 
   return rows;

@@ -97,8 +97,6 @@ export type TreeOverlayItem = {
   timestamp: string;
   /** Hidden behind a compaction summary (rendered dimmed). */
   summarized?: boolean;
-  /** Folded by default (compaction summary ranges). */
-  startFolded?: boolean;
   /** One of several children under its parent (connector glyph). */
   isForkChild?: boolean;
   isLastForkChild?: boolean;
@@ -1931,9 +1929,7 @@ export class Tui {
     this.treeOverlayActive = true;
     this.treeOverlayItems = items;
     this.treeOverlayInContextCount = inContextCount;
-    this.treeOverlayExpanded = new Set(
-      items.filter((item) => item.hasChildren && !item.startFolded).map((item) => item.id),
-    );
+    this.treeOverlayExpanded = new Set(items.filter((item) => item.hasChildren).map((item) => item.id));
     const leafIndex = items.findIndex((item) => item.isLeaf);
     this.treeOverlayIndex = leafIndex >= 0 ? leafIndex : 0;
     this.treeOverlayScroll = 0;
@@ -2121,8 +2117,11 @@ export class Tui {
       : item.role === "compaction"
         ? 73
         : currentTheme.blocks.assistant.accent;
-    // Summarized rows are hidden behind a compaction summary: dim them.
-    const previewFg = item.summarized && !isCursor ? 244 : roleColor;
+    // Summarized rows are hidden behind a compaction summary, and inactive
+    // branch alternatives are de-emphasized: dim both.
+    const previewFg = (item.summarized || (item.isForkChild && !item.isActive)) && !isCursor
+      ? 244
+      : roleColor;
     const indent = "  ".repeat(item.depth);
     const foldGlyph = item.hasChildren ? (this.treeOverlayExpanded.has(item.id) ? "⊟" : "⊞") : " ";
     const connector = item.isForkChild ? (item.isLastForkChild ? "└" : "├") : " ";
