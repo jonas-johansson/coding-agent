@@ -28,6 +28,7 @@ import type {
   FunctionTool,
   ResponseCreateParamsStreaming,
 } from "openai/resources/responses/responses";
+import { serializeToolArguments } from "./openai-compatible";
 
 // ── Provider metadata type ──────────────────────────────────────────────────
 
@@ -232,9 +233,7 @@ function toResponsesInput(messages: ProviderMessage[]): ResponseInputItem[] {
             type: "function_call",
             call_id: block.id,
             name: block.name,
-            arguments: typeof block.input === "string"
-              ? block.input
-              : JSON.stringify(block.input),
+            arguments: serializeToolArguments(block.input),
           });
         }
       }

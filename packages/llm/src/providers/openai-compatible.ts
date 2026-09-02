@@ -212,6 +212,26 @@ export function limitImages(messages: ProviderMessage[], max: number): ProviderM
   return limited;
 }
 
+/**
+ * Serialize a tool_use block's input for the wire format. Fireworks and
+ * other strict gateways require `function.arguments` to be a valid JSON
+ * object string. If a model emitted malformed JSON mid-stream, the raw
+ * string is kept as `input`; wrapping it preserves the content without
+ * poisoning every subsequent request. Exported so the OpenAI Responses-API
+ * path can apply the same sanitization.
+ */
+export function serializeToolArguments(input: unknown): string {
+  if (typeof input === "string") {
+    try {
+      JSON.parse(input);
+      return input;
+    } catch {
+      return JSON.stringify({ _raw: input });
+    }
+  }
+  return JSON.stringify(input ?? {});
+}
+
 function toOaiMessages(
   system: string,
   messages: ProviderMessage[],
@@ -323,7 +343,7 @@ function toOaiMessages(
             type: "function",
             function: {
               name: block.name,
-              arguments: typeof block.input === "string" ? block.input : JSON.stringify(block.input),
+              arguments: serializeToolArguments(block.input),
             },
           });
         }
@@ -458,7 +478,7 @@ function toResponsesInput(
             type: "function_call",
             call_id: block.id,
             name: block.name,
-            arguments: typeof block.input === "string" ? block.input : JSON.stringify(block.input),
+            arguments: serializeToolArguments(block.input),
           });
         }
       }
