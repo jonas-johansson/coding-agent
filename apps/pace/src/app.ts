@@ -46,7 +46,6 @@ import { initHighlighter } from "./syntax";
 import {
   tools,
   visualizeToolTitle,
-  visualizeToolPartialTitle,
   formatToolResultBody,
   truncateToolOutputIfNeeded,
   isAbortError,
@@ -90,7 +89,8 @@ import {
 import { readClipboardImage, type SupportedImageMediaType } from "./clipboard";
 import { sendDesktopNotification } from "./notify";
 import { onEvent, resolveProvider } from "@pace/llm";
-import { loadPaceConfig, DEFAULT_COST_DISPLAY_CONFIG, DEFAULT_COMPACTION_CONFIG, type CostDisplayConfig, type CompactionConfig } from "./config";
+import { loadPaceConfig, DEFAULT_COST_DISPLAY_CONFIG, DEFAULT_COMPACTION_CONFIG, DEFAULT_TOOL_PROGRESS_CONFIG, type CostDisplayConfig, type CompactionConfig, type ToolProgressConfig } from "./config";
+import { STREAM_TITLE_UPDATE_MS, streamingToolTitle } from "./tool-progress";
 import {
   assembleSystemText,
   computeCallCost,
@@ -163,6 +163,9 @@ let activeSession = createSession(process.cwd(), currentModelId);
 
 /** Compaction settings from ~/.config/pace/config.json (defaults apply otherwise). */
 let compactionConfig: CompactionConfig = DEFAULT_COMPACTION_CONFIG;
+
+/** Streaming tool-call progress settings from ~/.config/pace/config.json. */
+let toolProgressConfig: ToolProgressConfig = DEFAULT_TOOL_PROGRESS_CONFIG;
 
 /**
  * MCP server enable/disable overrides (Pace-owned runtime state). The
@@ -1818,7 +1821,7 @@ async function prompt(
   let currentReasoningBlockId: number | undefined;
   let currentReasoningTitle: string | undefined;
   const reasoningBlocks: ThinkingBlock[] = [];
-  const streamingTools = new Map<string, { name: string; inputJson: string }>();
+  const streamingTools = new Map<string, { name: string; inputJson: string; inputBytes: number; lastTitleAt: number }>();
   const toolBlocks = new Map<string, number>();
   const streamedToolContentByTool = new Map<string, string>();
   const runningToolUseIds = new Set<string>();
@@ -2031,7 +2034,7 @@ async function prompt(
           }
 
           case "tool_use_start": {
-            streamingTools.set(event.id, { name: event.name, inputJson: "" });
+            streamingTools.set(event.id, { name: event.name, inputJson: "", inputBytes: 0, lastTitleAt: 0 });
             currentTextBlockId = undefined;
             accText = "";
             finishReasoningBlock();
@@ -2045,15 +2048,45 @@ async function prompt(
             const state = streamingTools.get(event.id);
             if (state) {
               state.inputJson += event.partialJson;
+              state.inputBytes += Buffer.byteLength(event.partialJson, "utf8");
               const id = ensureToolBlock(toolBlocks, event.id, state.name);
-              tui.updateBlock(id, { title: visualizeToolPartialTitle(state.name, state.inputJson) });
+              // Throttle live title updates: partial-JSON parsing and renders
+              // are per-update, so large streaming inputs stay cheap.
+              const now = Date.now();
+              if (now - state.lastTitleAt >= STREAM_TITLE_UPDATE_MS) {
+                state.lastTitleAt = now;
+                tui.updateBlock(id, {
+                  title: streamingToolTitle({
+                    name: state.name,
+                    inputJson: state.inputJson,
+                    inputBytes: state.inputBytes,
+                    showBytes: toolProgressConfig.streamedBytes,
+                  }),
+                });
+              }
             }
             break;
           }
 
           case "block_stop": {
             if (event.id) {
-              streamingTools.delete(event.id);
+              const state = streamingTools.get(event.id);
+              if (state) {
+                // Final title from the complete input (drops the byte counter
+                // and catches up on any throttled-out path characters).
+                const blockId = toolBlocks.get(event.id);
+                if (blockId !== undefined) {
+                  tui.updateBlock(blockId, {
+                    title: streamingToolTitle({
+                      name: state.name,
+                      inputJson: state.inputJson,
+                      inputBytes: state.inputBytes,
+                      showBytes: false,
+                    }),
+                  });
+                }
+                streamingTools.delete(event.id);
+              }
             } else {
               finishReasoningBlock();
               currentTextBlockId = undefined;
@@ -2245,6 +2278,7 @@ async function main() {
     const paceConfig = await loadPaceConfig();
     costDisplayConfig = paceConfig.cost;
     compactionConfig = paceConfig.compaction;
+    toolProgressConfig = paceConfig.toolProgress;
     if (compactionConfig.model !== undefined && parseModelSelection(compactionConfig.model) === undefined) {
       throw new Error(`Invalid compaction.model. Expected provider/model or provider/model:variant for a supported provider: ${compactionConfig.model}`);
     }

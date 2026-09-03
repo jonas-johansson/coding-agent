@@ -24,9 +24,15 @@ export type CompactionConfig = {
   model?: string;
 };
 
+export type ToolProgressConfig = {
+  /** Show bytes streamed so far in the live title of a streaming tool call. */
+  streamedBytes: boolean;
+};
+
 export type PaceConfig = {
   cost: CostDisplayConfig;
   compaction: CompactionConfig;
+  toolProgress: ToolProgressConfig;
   defaultModel?: string;
   cycleModels?: string[];
   sessionTitleModel?: string;
@@ -45,9 +51,14 @@ export const DEFAULT_COMPACTION_CONFIG: CompactionConfig = {
   keepRecentTokens: 20_000,
 };
 
+export const DEFAULT_TOOL_PROGRESS_CONFIG: ToolProgressConfig = {
+  streamedBytes: true,
+};
+
 export const DEFAULT_PACE_CONFIG: PaceConfig = {
   cost: DEFAULT_COST_DISPLAY_CONFIG,
   compaction: DEFAULT_COMPACTION_CONFIG,
+  toolProgress: DEFAULT_TOOL_PROGRESS_CONFIG,
 };
 
 // ── Schema ───────────────────────────────────────────────────────────────────
@@ -67,15 +78,21 @@ const compactionConfigSchema = z.object({
   model: z.string().optional(),
 });
 
+const toolProgressConfigSchema = z.object({
+  streamedBytes: z.boolean().default(DEFAULT_TOOL_PROGRESS_CONFIG.streamedBytes),
+});
+
 const paceConfigSchema = z.object({
   cost: costDisplayConfigSchema.optional(),
   compaction: compactionConfigSchema.optional(),
+  toolProgress: toolProgressConfigSchema.optional(),
   defaultModel: z.string().optional(),
   cycleModels: z.array(z.string()).min(1).optional(),
   sessionTitleModel: z.string().optional(),
 }).transform((config) => ({
   cost: config.cost ?? DEFAULT_COST_DISPLAY_CONFIG,
   compaction: config.compaction ?? DEFAULT_COMPACTION_CONFIG,
+  toolProgress: config.toolProgress ?? DEFAULT_TOOL_PROGRESS_CONFIG,
   ...(config.defaultModel !== undefined && { defaultModel: config.defaultModel }),
   ...(config.cycleModels !== undefined && { cycleModels: config.cycleModels }),
   ...(config.sessionTitleModel !== undefined && { sessionTitleModel: config.sessionTitleModel }),

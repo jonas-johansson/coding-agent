@@ -227,6 +227,16 @@ To display estimated costs in a specific currency, configure a USD conversion ra
 
 If `fractionDigits` is omitted, Pace uses dynamic precision similar to the default USD display.
 
+While a tool call's arguments stream in from the model (for example the content of a large `write`), Pace appends the number of bytes received so far to the live tool title, e.g. `write: src/app.ts · 12600 B`. To turn it off:
+
+```json
+{
+  "toolProgress": {
+    "streamedBytes": false
+  }
+}
+```
+
 ## Omarchy theme synchronization
 
 Pace detects the active Omarchy theme background and uses its built-in dark or light theme. To update a running Pace session when Omarchy changes theme, install the included hook once from the Pace repository:
