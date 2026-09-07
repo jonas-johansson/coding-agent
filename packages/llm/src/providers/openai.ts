@@ -76,6 +76,12 @@ function stripReplayReadonlyFields(item: ResponseOutputItem): ResponseInputItem 
   return rest as unknown as ResponseInputItem;
 }
 
+function isFunctionCallInputItem(
+  item: ResponseInputItem,
+): item is Extract<ResponseInputItem, { type: "function_call" }> {
+  return (item as { type?: string }).type === "function_call";
+}
+
 function toReplayInputItem(item: ResponseOutputItem): ResponseInputItem | undefined {
   if (item.type === "reasoning") {
     if (!item.encrypted_content) {
@@ -204,12 +210,37 @@ function toResponsesInput(messages: ProviderMessage[]): ResponseInputItem[] {
     } else {
       // Assistant message — prefer sanitized OpenAI output items if available.
       if (isOpenAIMetadata(msg.providerMetadata)) {
+        const replayed: ResponseInputItem[] = [];
         for (const item of msg.providerMetadata.outputItems) {
           const replayItem = toReplayInputItem(item);
           if (replayItem) {
-            items.push(replayItem);
+            replayed.push(replayItem);
           }
         }
+
+        // A stream that ended before emitting response.output_item.done for a
+        // function call still yields a tool_use content block (via the
+        // completed-tool-calls fallback) but no function_call output item.
+        // Replaying such metadata would send a function_call_output with no
+        // matching call, which the API rejects with a 400. Synthesize the
+        // missing function_call items from the content blocks. This also
+        // repairs sessions persisted before the stream adapter kept metadata
+        // consistent.
+        const replayedCallIds = new Set(
+          replayed.filter(isFunctionCallInputItem).map((item) => item.call_id),
+        );
+        for (const block of msg.content) {
+          if (block.type === "tool_use" && !replayedCallIds.has(block.id)) {
+            replayed.push({
+              type: "function_call",
+              call_id: block.id,
+              name: block.name,
+              arguments: serializeToolArguments(block.input),
+            });
+          }
+        }
+
+        items.push(...replayed);
         continue;
       }
 
@@ -643,6 +674,17 @@ class OpenAIStream implements ProviderStream {
         name: tc.name,
         input: parseToolArguments(tc.arguments),
       });
+      // Keep the replayed metadata consistent with the content: without the
+      // function_call output item, the next request would carry a
+      // function_call_output with no matching call and the API would reject
+      // it with a 400.
+      this.outputItems.push({
+        type: "function_call",
+        id: tc.itemId,
+        call_id: tc.callId,
+        name: tc.name,
+        arguments: serializeToolArguments(parseToolArguments(tc.arguments)),
+      } as ResponseOutputItem);
     }
 
     const stopReason: "end_turn" | "tool_use" =
