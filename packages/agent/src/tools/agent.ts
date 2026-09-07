@@ -68,6 +68,9 @@ export const agentTool = defineTool({
     "Choose the agent whose description matches the task. " +
     "For parallel independent work, call this tool multiple times in one turn.",
   concurrency: "safe",
+  // Subagent results are the distilled output of an entire isolated run, so
+  // they are never truncated to the generic tool-output cap.
+  truncateOutput: false,
   inputSchema: z.object({
     agent: z.string().describe("The agent name to invoke"),
     task: z.string().describe("The task for the agent to complete"),
