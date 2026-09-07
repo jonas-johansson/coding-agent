@@ -46,7 +46,7 @@ const BUILTIN_EXPLORE_AGENT: AgentDefinition = {
     "and answering questions about the project. Delegate research tasks here to " +
     "keep the main conversation clean.",
   tools: ["read", "bash", "web_fetch", "web_search"],
-  model: "opencode/deepseek-v4-flash",
+  model: "fireworks/glm-5.3-flash",
   source: "builtin",
   body: `You are the explore agent. You do fast, read-only codebase exploration.
 
