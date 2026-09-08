@@ -52,6 +52,19 @@ export type ToolExecutionContext = {
 
 type ZodObjectSchema = z.ZodObject<z.core.$ZodShape>;
 
+/**
+ * Batch scheduling contract:
+ *
+ * - `"safe"` — the call may run concurrently with adjacent safe calls in the
+ *   same batch. It must not mutate state that other same-batch calls could
+ *   observe (read-only, or side effects isolated from the batch).
+ * - `"exclusive"` — the call runs alone as a barrier: it starts only after
+ *   all earlier calls in the batch completed, and later calls wait for it.
+ *   This preserves side-effect ordering for batches like
+ *   `[bash "codegen", read out.ts]` or `[edit foo.ts, read foo.ts]`.
+ *
+ * Absence defaults to exclusive.
+ */
 export type ToolConcurrency = "safe" | "exclusive";
 
 export type ToolDescriptor<T extends ZodObjectSchema = ZodObjectSchema> = {

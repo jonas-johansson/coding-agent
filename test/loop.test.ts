@@ -375,6 +375,320 @@ test("exclusive tools run sequentially, safe tools run concurrently", async () =
   assert.deepEqual(order, ["start_exclusive", "end_exclusive"]);
 });
 
+// ── Mixed-batch scheduling: exclusive tools are barriers ─────────────────────
+
+function makeGateTools() {
+  const order: string[] = [];
+  const release: (() => void)[] = [];
+  const gate = () => new Promise<void>((resolve) => release.push(resolve));
+
+  const safeTool: ToolDescriptor = defineTool({
+    name: "safe_gate",
+    description: "",
+    inputSchema: z.object({}),
+    concurrency: "safe",
+    execute: async () => {
+      order.push("start_safe");
+      await gate();
+      order.push("end_safe");
+      return { content: [{ type: "text", text: "" }] };
+    },
+  });
+
+  const exclusiveTool: ToolDescriptor = defineTool({
+    name: "exclusive_gate",
+    description: "",
+    inputSchema: z.object({}),
+    execute: async () => {
+      order.push("start_exclusive");
+      await gate();
+      order.push("end_exclusive");
+      return { content: [{ type: "text", text: "" }] };
+    },
+  });
+
+  return { order, release, gate, safeTool, exclusiveTool };
+}
+function gateBatchResponse(names: string[]): { provider: Provider; ids: string[] } {
+  const ids = names.map((_, i) => `call_${i}`);
+  const { provider } = mockProvider([
+    {
+      response: {
+        content: names.map((name, i) => ({
+          type: "tool_use" as const,
+          id: ids[i],
+          name,
+          input: {},
+        })),
+        stopReason: "tool_use" as const,
+        usage: baseUsage,
+      },
+    },
+    { response: textResponse("done") },
+  ]);
+  return { provider, ids };
+}
+
+async function waitForOrder(order: string[], predicate: () => boolean): Promise<void> {
+  await new Promise<void>((resolve) => {
+    const check = () => (predicate() ? resolve() : setTimeout(check, 5));
+    check();
+  });
+}
+
+test("mixed batch: consecutive safe calls run concurrently before an exclusive barrier", async () => {
+  const { order, release, safeTool, exclusiveTool } = makeGateTools();
+  const { provider } = gateBatchResponse(["safe_gate", "safe_gate", "exclusive_gate"]);
+
+  const loopPromise = runAgentLoop(baseParams({ provider, tools: [safeTool, exclusiveTool] }));
+
+  // Both safe calls must start before either finishes.
+  await waitForOrder(order, () => order.filter((e) => e === "start_safe").length === 2);
+  assert.equal(order.filter((e) => e === "start_safe").length, 2);
+  assert.equal(order.filter((e) => e === "end_safe").length, 0);
+  assert.equal(order.includes("start_exclusive"), false);
+
+  release[0]();
+  release[1]();
+
+  // The exclusive barrier starts only after both safe calls completed.
+  await waitForOrder(order, () => order.includes("start_exclusive"));
+  assert.deepEqual(order.slice(0, 4), ["start_safe", "start_safe", "end_safe", "end_safe"]);
+  release[2]();
+
+  await loopPromise;
+  assert.deepEqual(order, [
+    "start_safe",
+    "start_safe",
+    "end_safe",
+    "end_safe",
+    "start_exclusive",
+    "end_exclusive",
+  ]);
+});
+
+test("mixed batch: exclusive call runs first, later safe calls run concurrently", async () => {
+  const { order, release, safeTool, exclusiveTool } = makeGateTools();
+  const { provider } = gateBatchResponse(["exclusive_gate", "safe_gate", "safe_gate"]);
+
+  const loopPromise = runAgentLoop(baseParams({ provider, tools: [safeTool, exclusiveTool] }));
+
+  await waitForOrder(order, () => order.includes("start_exclusive"));
+  assert.deepEqual(order, ["start_exclusive"]);
+  release[0]();
+
+  await waitForOrder(order, () => order.filter((e) => e === "start_safe").length === 2);
+  assert.equal(order.filter((e) => e === "end_safe").length, 0);
+  release[1]();
+  release[2]();
+
+  await loopPromise;
+  assert.deepEqual(order, [
+    "start_exclusive",
+    "end_exclusive",
+    "start_safe",
+    "start_safe",
+    "end_safe",
+    "end_safe",
+  ]);
+});
+
+test("mixed batch: exclusive call is a barrier on both sides", async () => {
+  const { order, release, safeTool, exclusiveTool } = makeGateTools();
+  const { provider } = gateBatchResponse(["safe_gate", "exclusive_gate", "safe_gate"]);
+
+  const loopPromise = runAgentLoop(baseParams({ provider, tools: [safeTool, exclusiveTool] }));
+
+  await waitForOrder(order, () => order.includes("start_safe"));
+  assert.deepEqual(order, ["start_safe"]);
+  release[0]();
+
+  await waitForOrder(order, () => order.includes("start_exclusive"));
+  assert.deepEqual(order, ["start_safe", "end_safe", "start_exclusive"]);
+  release[1]();
+
+  await waitForOrder(order, () => order.filter((e) => e === "start_safe").length === 2);
+  assert.deepEqual(order, ["start_safe", "end_safe", "start_exclusive", "end_exclusive", "start_safe"]);
+  release[2]();
+
+  await loopPromise;
+  assert.deepEqual(order, [
+    "start_safe",
+    "end_safe",
+    "start_exclusive",
+    "end_exclusive",
+    "start_safe",
+    "end_safe",
+  ]);
+});
+
+test("four safe calls run concurrently when an exclusive call trails the batch", async () => {
+  const { order, release, safeTool, exclusiveTool } = makeGateTools();
+  const { provider } = gateBatchResponse([
+    "safe_gate",
+    "safe_gate",
+    "safe_gate",
+    "safe_gate",
+    "exclusive_gate",
+  ]);
+
+  const loopPromise = runAgentLoop(baseParams({ provider, tools: [safeTool, exclusiveTool] }));
+
+  await waitForOrder(order, () => order.filter((e) => e === "start_safe").length === 4);
+  assert.equal(order.filter((e) => e === "start_safe").length, 4);
+  assert.equal(order.includes("start_exclusive"), false);
+
+  for (let i = 0; i < 4; i++) release[i]();
+
+  await waitForOrder(order, () => order.includes("start_exclusive"));
+  release[4]();
+
+  await loopPromise;
+  assert.equal(order.filter((e) => e === "start_safe").length, 4);
+  assert.equal(order.filter((e) => e === "end_safe").length, 4);
+  assert.deepEqual(order.slice(-2), ["start_exclusive", "end_exclusive"]);
+});
+
+test("abort inside a safe run prevents the following exclusive call from starting", async () => {
+  const { order, release, gate, safeTool } = makeGateTools();
+  const abortingTool: ToolDescriptor = defineTool({
+    name: "aborting_safe",
+    description: "",
+    inputSchema: z.object({}),
+    concurrency: "safe",
+    execute: async () => {
+      order.push("start_abort");
+      await gate();
+      order.push("end_abort");
+      throw new DOMException("Aborted", "AbortError");
+    },
+  });
+  const { provider, ids } = gateBatchResponse(["safe_gate", "aborting_safe", "exclusive_gate"]);
+  const toolResultCalls: ExecutedTool[][] = [];
+
+  const loopPromise = runAgentLoop(baseParams({
+    provider,
+    tools: [safeTool, abortingTool],
+    onToolResults: (executed) => toolResultCalls.push(executed),
+  }));
+
+  await waitForOrder(order, () => order.filter((e) => e.startsWith("start_")).length === 2);
+  release[1](); // release the aborting call first
+
+  const result = await loopPromise;
+
+  assert.equal(result.cancelled, true);
+  assert.equal(order.includes("start_exclusive"), false);
+  assert.equal(toolResultCalls.length, 1);
+  assert.deepEqual(
+    toolResultCalls[0].map((executed) => executed.result.tool_use_id),
+    ids,
+  );
+  for (const executed of toolResultCalls[0]) {
+    assert.equal(executed.result.is_error, true);
+    assert.match(executed.result.content[0].text, /cancelled/i);
+  }
+  release[0](); // unblock the still-pending sibling so the test exits cleanly
+});
+
+test("mixed batch results are delivered in tool-call order regardless of completion order", async () => {
+  const order: string[] = [];
+  const release: (() => void)[] = [];
+  const gate = () => new Promise<void>((resolve) => release.push(resolve));
+
+  // First safe call is slow, second is fast, so completion order differs
+  // from tool-call order.
+  const slowSafe: ToolDescriptor = defineTool({
+    name: "slow_safe",
+    description: "",
+    inputSchema: z.object({}),
+    concurrency: "safe",
+    execute: async () => {
+      order.push("start_slow");
+      await gate();
+      order.push("end_slow");
+      return { content: [{ type: "text", text: "slow" }] };
+    },
+  });
+  const fastSafe: ToolDescriptor = defineTool({
+    name: "fast_safe",
+    description: "",
+    inputSchema: z.object({}),
+    concurrency: "safe",
+    execute: async () => {
+      order.push("start_fast");
+      await gate();
+      order.push("end_fast");
+      return { content: [{ type: "text", text: "fast" }] };
+    },
+  });
+  const exclusiveTool: ToolDescriptor = defineTool({
+    name: "exclusive_gate",
+    description: "",
+    inputSchema: z.object({}),
+    execute: async () => {
+      order.push("start_exclusive");
+      await gate();
+      order.push("end_exclusive");
+      return { content: [{ type: "text", text: "" }] };
+    },
+  });
+  const { provider } = gateBatchResponse(["slow_safe", "fast_safe", "exclusive_gate"]);
+  const toolResultCalls: ExecutedTool[][] = [];
+
+  const loopPromise = runAgentLoop(baseParams({
+    provider,
+    tools: [slowSafe, fastSafe, exclusiveTool],
+    onToolResults: (executed) => toolResultCalls.push(executed),
+  }));
+
+  await waitForOrder(order, () => order.length === 2);
+  release[1](); // fast call finishes first
+  await waitForOrder(order, () => order.includes("end_fast"));
+  assert.equal(toolResultCalls.length, 0); // batch not persisted yet
+  release[0]();
+  await waitForOrder(order, () => order.includes("start_exclusive"));
+  release[2]();
+  await loopPromise;
+
+  assert.equal(toolResultCalls.length, 1);
+  assert.deepEqual(
+    toolResultCalls[0].map((executed) => executed.result.tool_use_id),
+    ["call_0", "call_1", "call_2"],
+  );
+  assert.match(toolResultCalls[0][0].display, /slow/);
+  assert.match(toolResultCalls[0][1].display, /fast/);
+});
+
+test("unknown tool acts as a barrier between safe runs", async () => {
+  const { order, release, safeTool } = makeGateTools();
+  const { provider } = gateBatchResponse(["safe_gate", "no_such_tool", "safe_gate"]);
+  const toolResultCalls: ExecutedTool[][] = [];
+
+  const loopPromise = runAgentLoop(baseParams({
+    provider,
+    tools: [safeTool],
+    onToolResults: (executed) => toolResultCalls.push(executed),
+  }));
+
+  await waitForOrder(order, () => order.includes("start_safe"));
+  assert.deepEqual(order, ["start_safe"]);
+  release[0]();
+
+  // The unknown tool runs alone as a barrier; the trailing safe call only
+  // starts after it, and must be released for the batch to finish.
+  await waitForOrder(order, () => order.filter((e) => e === "start_safe").length === 2);
+  assert.deepEqual(order, ["start_safe", "end_safe", "start_safe"]);
+  release[1]();
+
+  await loopPromise;
+
+  assert.deepEqual(order, ["start_safe", "end_safe", "start_safe", "end_safe"]);
+  assert.equal(toolResultCalls.length, 1);
+  assert.match(toolResultCalls[0][1].display, /Couldn't find tool/);
+  assert.equal(toolResultCalls[0][1].result.is_error, true);
+});
+
 // ── Auto-compaction trigger ──────────────────────────────────────────────────
 
 test("compact runs before the first request when initialContextTokens >= threshold", async () => {

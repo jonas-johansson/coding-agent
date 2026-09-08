@@ -175,11 +175,39 @@ export async function executeToolCall(
   }
 }
 
-function hasExclusiveTool(toolUseBlocks: ToolUseBlock[], toolList: ToolDescriptor[]): boolean {
-  return toolUseBlocks.some((block) => {
-    const tool = toolList.find((candidate) => candidate.name === block.name);
-    return tool?.concurrency !== "safe";
-  });
+function isConcurrencySafe(block: ToolUseBlock, toolList: ToolDescriptor[]): boolean {
+  const tool = toolList.find((candidate) => candidate.name === block.name);
+  return tool?.concurrency === "safe";
+}
+
+/**
+ * Execute a batch of tool calls with exclusive tools as barriers: maximal
+ * runs of consecutive safe calls run concurrently, exclusive calls run
+ * alone, and every step waits for the previous one. Submission order is
+ * preserved; only completion order may vary within a safe run.
+ */
+async function runToolBatch(
+  blocks: ToolUseBlock[],
+  toolList: ToolDescriptor[],
+  signal: AbortSignal | undefined,
+  runOne: (block: ToolUseBlock) => Promise<ExecutedTool>,
+): Promise<void> {
+  let index = 0;
+  while (index < blocks.length) {
+    throwIfAborted(signal);
+    if (!isConcurrencySafe(blocks[index], toolList)) {
+      await runOne(blocks[index]);
+      index += 1;
+      continue;
+    }
+    let end = index + 1;
+    while (end < blocks.length && isConcurrencySafe(blocks[end], toolList)) {
+      end += 1;
+    }
+    const group = blocks.slice(index, end);
+    await Promise.all(group.map(runOne));
+    index = end;
+  }
 }
 
 // ── Loop ─────────────────────────────────────────────────────────────────────
@@ -269,7 +297,9 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
 
     // Collect and execute tool calls. Results are returned as one grouped
     // user message so every tool_use in this assistant turn is answered
-    // together, even when execution happens in parallel.
+    // together, even when execution happens concurrently. Safe calls run
+    // concurrently between exclusive calls, which act as barriers
+    // (see runToolBatch).
     const completed = new Map<string, ExecutedTool>();
     let abortedDuringExecution = false;
     try {
@@ -287,14 +317,7 @@ export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopRe
         return executed;
       };
 
-      if (hasExclusiveTool(toolUseBlocks, params.tools)) {
-        for (const block of toolUseBlocks) {
-          throwIfAborted(params.signal);
-          await runOne(block);
-        }
-      } else {
-        await Promise.all(toolUseBlocks.map(runOne));
-      }
+      await runToolBatch(toolUseBlocks, params.tools, params.signal, runOne);
     } catch (error) {
       if (!isAbortError(error)) throw error;
       abortedDuringExecution = true;
